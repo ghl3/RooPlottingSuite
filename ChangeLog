@@ -1,0 +1,9 @@
+
+2012-01-16 George Lewis <George.Herbert.Lewis@cern.ch>
+	* Created a dedicated package making nice plots from histograms
+	* Mostly a copy of scripts from Hllll-00-06-02/scriptsfor now.
+	* Adding PlotMaker.py
+	* Adding AtlasStyle.py	
+	* Adding AtlasUtil.py
+	* Adding __init__.py	
+	* Tagging as PlotMaker-00-00-01
