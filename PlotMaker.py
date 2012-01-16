@@ -6,6 +6,8 @@
 #
 
 import ROOT
+import glob
+import log, logging
 
 class PlotMaker( ROOT.TNamed ):
 
@@ -15,11 +17,14 @@ class PlotMaker( ROOT.TNamed ):
         ROOT.TNamed.__init__( self, name, title )
         self.SetName( name )
         self.SetTitle( title )
+        self.logger = log.getLogger( name )
+        self.logger.setLevel( logging.INFO )
 
         # Initialize the internal variables:
         self.__datafiles = []
         self.__mcsamples = {}
         self.__bsmsamples = {}
+        self.__mccolors = {}
 
         self.__legendLowX = 0.65
         self.__legendLowY = 0.5
@@ -32,21 +37,40 @@ class PlotMaker( ROOT.TNamed ):
         self.__2DlegendHighY = 0.99
 
         self.__luminosity = 1.0
+        self.__scaleMCByLumi = False
 
         # colors for stacks
-        #  self.__colors = [ 2,3,4,5,6,7,8,9 ] # simple choice (high intensity)
-        #  self.__colors = [40,41,46,38,33,30,20,7,8,9,32,25,28] # dark colors
-        self.__colors = [4,3,2,5,6,40,41,46,38,33,30,20,7,8,9] # bright colors
+        #  self.__defaultcolors = [ 2,3,4,5,6,7,8,9 ] # simple choice (high intensity)
+        #  self.__defaultcolors = [40,41,46,38,33,30,20,7,8,9,32,25,28] # dark colors
+        self.__defaultcolors = [4,3,2,5,6,40,41,46,38,33,30,20,7,8,9] # bright colors
         return
+
+
+#    def SetLoggerLevel( self, level ) :
+#        self.__logger.setLevel( level )
+
+
+    def SetLevelInfo( self ) :
+        self.logger.setLevel( logging.INFO )    
+
+    def SetLevelDebug( self ) :
+        self.logger.setLevel( logging.DEBUG )    
+
+
+    def ScaleMCByLumi( self, doScale=True ):
+        # Set to true or false the scaling
+        # of all MC by the supplied Lumi
+        self.__scaleMCByLumi = doScale
 
 
     def AddDataFile( self, filename ):
-        self.Info( "AddDataFile", "Adding data file: " + filename )
+        self.logger.info( "AddDataFile: Adding data file: " + filename )
         self.__datafiles += [ filename ]
         return
 
-    def AddMCFile( self, mctype, filename ):
-        self.Info( "AddMCFile", "Adding Monte Carlo file: " + filename + " (" + mctype + ")" )
+    def AddMCFile( self, mctype, filename, color=None ):
+        self.logger.info( "AddMCFile:  Adding Monte Carlo file: " + filename + " (" + mctype + ")" )
+        self.__mccolors[ mctype ] = color
         if mctype in self.__mcsamples.keys():
             self.__mcsamples[ mctype ] += [ filename ]
         else:
@@ -54,14 +78,45 @@ class PlotMaker( ROOT.TNamed ):
             pass
         return
 
-    def AddBSMFile( self, bsmtype, filename, weight ):
-        self.Info( "AddBSMFile", "Adding BSM file: " + filename + " (" + bsmtype + "," + str( weight ) + ")" )
+    def AddBSMFile( self, bsmtype, filename, weight=1.0, color=None ):
+        self.logger.info( "AddBSMFile:  Adding BSM file: " + filename + " (" + bsmtype + "," + str( weight ) + ")" )
+        self.__mccolors[ bsmtype ] = color
         if bsmtype in self.__bsmsamples.keys():
             self.__bsmsamples[ bsmtype ] += [ [ filename, weight ] ]
         else:
             self.__bsmsamples[ bsmtype ]  = [ [ filename, weight ] ]
             pass
         return
+
+    
+    def AddMultipleMCFiles( self, mctype, fileExpression, color=None ):
+        
+        # Take a RegEx and use glob to
+        # add multiple files at once
+        
+        FileList = glob.glob( fileExpression )
+        
+        if len( FileList ) == 0 :
+            self.logger.warning( "No files added from: %s" % fileExpression )
+            return
+            
+        for file in FileList:
+            self.AddMCFile( mctype, file, color )
+                
+    def AddMultipleDataFiles( self, fileExpression ):
+        
+        # Take a RegEx and use glob to
+        # add multiple files at once
+                    
+        FileList = glob.glob( fileExpression )
+        
+        if len( FileList ) == 0 :
+            self.logger.warning("No files added from: %s " % fileExpression)
+            return
+
+        for file in FileList:
+            self.AddDataFile( file )
+
 
     def SetLegendSize( self, lowX, lowY, highX, highY ):
         self.__legendLowX = lowX
@@ -74,6 +129,17 @@ class PlotMaker( ROOT.TNamed ):
         self.__luminosity = luminosity
         return
 
+    def GetDefaultColor( self, usedcolors ) :
+        for color in self.__defaultcolors:
+            if color not in usedcolors:
+                usedcolors.append( color )
+                return color
+            
+        # If all the colors are used, 
+        # Reset and start again:
+        del usedcolors[ : ]
+        return GetDefaultColor( usedcolors )
+
     def PlotHistogram( self, hname, filename ):
         # Retrieve the data and MC histograms:
         dhist = self.GetDataHist( hname )
@@ -85,6 +151,8 @@ class PlotMaker( ROOT.TNamed ):
         for mctype in mchists.keys():
             # make projections and add them
             h1d = mchists[ mctype ]
+            if( self.__scaleMCByLumi):
+                h1d.Scale( self.__luminosity )
             if addedSamples:
                 addedSamples.Add ( h1d )
             else:
@@ -107,18 +175,22 @@ class PlotMaker( ROOT.TNamed ):
         # Every element should be a list of the form [histo, "name", "style"]
         legendEntries = []
         # Now draw the MC histograms one by one:
-        color = 2
+
+        usedcolors = []
+        #color = 2
         for mctype in mchists.keys():
             mchist = mchists[ mctype ]
+            color = self.__mccolors[ mctype ]
+            if( color == None ) :
+                color = self.GetDefaultColor( usedcolors )
             mchist.SetFillColor(color)
             mchist.SetLineColor(color)
             stack.Add( mchist )
             stack.Draw( "HIST SAME" )
             legendEntries.append( [mchist, mctype, "f"] )
-            color = color + 1
-            if color == 9:
-                color = 2
+            self.logger.debug( "Adding mc histogram to stack: %s (color = %d )" % (mctype, color) )
             pass
+
         # Draw the data points again:
         dhist.Draw( "SAME" )
 
@@ -134,17 +206,22 @@ class PlotMaker( ROOT.TNamed ):
 
         # Draw the BSM histograms one-by-one and draw the legend:
         lstyle = 2
-        color = 1
+
         for bsmtype in bsmhists.keys():
             bsmhist = bsmhists[ bsmtype ]
+            if( self.__scaleMCByLumi):
+                bsmhist.Scale( self.__luminosity )
+            color = self.__mccolors[ bsmtype ]
+            if( color == None ) :
+                color = self.GetDefaultColor( usedcolors )
             bsmhist.SetLineColor( color )
             bsmhist.SetLineStyle( lstyle )
+            self.logger.debug( "Adding bsm histogram to stack: %s (color = %d, lstyle = %d )" % (bsmtype, color, lstyle) )
             bsmhist.Draw( "HIST SAME" )
             legend.AddEntry( bsmhist, bsmtype, "l" )
             lstyle += 1
             if lstyle == 9:
                 lstyle = 2
-                color += 1
                 pass
             pass
         legend.Draw()
@@ -179,7 +256,7 @@ class PlotMaker( ROOT.TNamed ):
 
     def GetMCHists( self, hname ):
         result = {}
-        color = 1
+        #color = 1
         for mctype in self.__mcsamples.keys():
             mcfiles = self.__mcsamples[ mctype ]
             typeHist = None
@@ -198,9 +275,9 @@ class PlotMaker( ROOT.TNamed ):
                     pass
                 tfile.Close()
                 pass
-            typeHist.SetFillStyle( 1001 )
-            typeHist.SetFillColor( color )
-            color += 1
+            #typeHist.SetFillStyle( 1001 )
+            #typeHist.SetFillColor( color )
+            #color += 1
             result[ mctype ] = typeHist
             pass
         return result
@@ -228,12 +305,12 @@ class PlotMaker( ROOT.TNamed ):
                     pass
                 tfile.Close()
                 pass
-            typeHist.SetFillStyle( 0 )
-            typeHist.SetLineStyle( lstyle )
-            typeHist.SetLineColor( lstyle )
-            lstyle += 1
-            if lstyle == 9:
-                lstyle = 2
+            #typeHist.SetFillStyle( 0 )
+            #typeHist.SetLineStyle( lstyle )
+            #typeHist.SetLineColor( lstyle )
+            #lstyle += 1
+            #if lstyle == 9:
+            #    lstyle = 2
             result[ bsmtype ] = typeHist
             pass
         return result
@@ -305,22 +382,22 @@ class PlotMaker( ROOT.TNamed ):
         stack = ROOT.THStack( hname + "_mcstack", "Stacked MC histograms" )
         # Now draw the MC histograms one by one:
         lstyle = 1
-        color = 2
+        #color = 2
         # Every element should be a list of the form [histo, "name", "style"]
+        usedcolors = []
         legendEntries = []
         for mctype in mchists.keys():
             h1d = mchists[ mctype ]
             h1d.SetFillStyle( 1001 )
+            color = self.__mccolors[ mctype ]
+            if( color == None ) :
+                color = self.GetDefaultColor( usedcolors )
             h1d.SetFillColor( color )
             h1d.SetLineColor( color )
             h1d.SetLineStyle( lstyle )
             
             stack.Add( h1d )
             legendEntries.append( [h1d, mctype, "f"] )
-            color += 1
-            if color == 9:
-                color = 2
-                lstyle += 1
             pass
 
         legendEntries.reverse()
@@ -347,13 +424,16 @@ class PlotMaker( ROOT.TNamed ):
             legend2.SetFillStyle( 0 )
 
             lstyle = 1
-            color = 2
+            #color = 2
             maxim = -1
             # Draw the BSM histograms one-by-one:
             for bsmtype in bsmhists.keys():
                 h1d = bsmhists[ bsmtype ]
                 if h1d.GetEntries() < 1:
                     continue
+                color = self.__mccolors[ mctype ]
+                if( color == None ) :
+                    color = self.GetDefaultColor( usedcolors )
                 h1d.SetLineColor( color )
                 h1d.SetLineStyle( lstyle )
                 if hTitle!="":
@@ -371,10 +451,7 @@ class PlotMaker( ROOT.TNamed ):
                 legend2.AddEntry( h1d, bsmtype
 #                               + " (x" + str( self.__bsmsamples[ bsmtype ][ 0 ][ 1 ] ) + ")"
                                   , "l" )
-                color += 1
-                if color == 9:
-                    color = 2
-                    lstyle += 1
+                #lstyle += 1
                 pass
 
             first = True
@@ -402,8 +479,6 @@ class PlotMaker( ROOT.TNamed ):
         return
 
 ###############################
-
-
 
 ###############################
 # plot slices of 2D histogram #
@@ -477,7 +552,8 @@ class PlotMaker( ROOT.TNamed ):
         stack = ROOT.THStack( hname + "_mcstack", "Stacked MC histograms" )
         # Now draw the MC histograms one by one:
         lstyle = 1
-        color = 2
+        #color = 2
+        usedcolors = []
         # Every element should be a list of the form [histo, "name", "style"]
         legendEntries = []
         for mctype in mchists.keys():
@@ -488,15 +564,15 @@ class PlotMaker( ROOT.TNamed ):
             label = yaxis.GetBinLabel(firstBin)
             hist = h2d.ProjectionX(title+label+mctype, firstBin, lastBin)
             hist.SetFillStyle( 1001 )
+            color = self.__mccolors[ mctype ]
+            if( color == None ) :
+                color = self.GetDefaultColor( usedcolors )
             hist.SetFillColor( color )
             hist.SetLineColor( color )
             hist.SetLineStyle( lstyle )
             stack.Add( hist )
             legendEntries.append( [hist, mctype, "f"] )
-            color += 1
-            if color == 9:
-                color = 2
-                lstyle += 1
+            #lstyle += 1
             pass
 
         legendEntries.reverse()
@@ -532,7 +608,7 @@ class PlotMaker( ROOT.TNamed ):
             lstyle = 2
         else:
             lstyle = 1
-        color = 1
+        #color = 1
         first = 1
         maxim = -1
         minim = 10
@@ -548,6 +624,9 @@ class PlotMaker( ROOT.TNamed ):
             hists1d += [ h2d.ProjectionX(title+label+bsmtype, firstBin, lastBin) ]
             if hists1d[-1].GetEntries() < 1:
                 continue
+            color = self.__mccolors[ mctype ]
+            if( color == None ) :
+                color = self.GetDefaultColor( usedcolors )
             hists1d[-1].SetLineColor( color )
             hists1d[-1].SetLineStyle( lstyle )
             if not overlaySigMC:
@@ -576,13 +655,6 @@ class PlotMaker( ROOT.TNamed ):
                 lstyle += 1
                 if lstyle == 9:
                     lstyle = 2
-                    color += 1
-                    pass
-            else:
-                color += 1
-                if color == 9:
-                    color = 2
-                    lstyle += 1
                     pass
 
         if hTitle!="":
@@ -635,7 +707,7 @@ class PlotMaker( ROOT.TNamed ):
 
         # Sum together the background histograms
         if len(mchists)<1:
-            print "ERROR in Draw2Dhisto: empty mchists"
+            self.logger.error("ERROR in Draw2Dhisto: empty mchists" )
             return
 
         hBkg = None
@@ -757,7 +829,7 @@ class PlotMaker( ROOT.TNamed ):
 
         # Sum together the background histograms
         if len(mchists)<1:
-            print "ERROR in DrawHoriSliceFrom3D: empty mchists"
+            self.logger.error( "ERROR in DrawHoriSliceFrom3D: empty mchists" )
             return
 
         hBkg = None

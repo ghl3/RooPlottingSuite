@@ -1,5 +1,13 @@
 
 2012-01-16 George Lewis <George.Herbert.Lewis@cern.ch>
+	* Added python style logging
+	* Added the ability to assign colors to MC samples
+	* Added optional scaling of MC by lumi
+	* Adding log.py
+	* Tagging as PlotMaker-00-00-02
+
+	
+2012-01-16 George Lewis <George.Herbert.Lewis@cern.ch>
 	* Created a dedicated package making nice plots from histograms
 	* Mostly a copy of scripts from Hllll-00-06-02/scriptsfor now.
 	* Adding PlotMaker.py
