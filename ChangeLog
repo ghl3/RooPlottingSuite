@@ -1,5 +1,9 @@
 
 2012-01-17 George Lewis <George.Herbert.Lewis@cern.ch>
+	* Fixed the internals of PlotMaker.py
+	* Tagging as PlotMaker-00-00-04
+
+2012-01-17 George Lewis <George.Herbert.Lewis@cern.ch>
 	* Merged the drawing of 1-d histograms to one method
 	* Added configuration for Atlas Labels, line styles, 
 	* Added simultaneous adding of data and mc files using glob
