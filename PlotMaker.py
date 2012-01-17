@@ -27,7 +27,6 @@ class PlotMaker( ROOT.TNamed ):
         self.__colors = {}
         self.__linestyles = {}
 
-
         self.__legendLowX = 0.65
         self.__legendLowY = 0.5
         self.__legendHighX = 0.9
@@ -42,6 +41,9 @@ class PlotMaker( ROOT.TNamed ):
         self.__scaleMCByLumi = False
         self.__AtlasLabel = True
         self.__useLogScale = False
+        self.__doHistRebin = False
+        self.__newBins = None
+
 
         # colors for stacks
         #  self.__defaultcolors = [ 2,3,4,5,6,7,8,9 ] # simple choice (high intensity)
@@ -53,6 +55,10 @@ class PlotMaker( ROOT.TNamed ):
 #    def SetLoggerLevel( self, level ) :
 #        self.__logger.setLevel( level )
 
+
+    def RebinHistograms( self, bins ):
+        self.__doHistRebin = True
+        self.__newBins = bins
 
     def SetLevelInfo( self ) :
         self.logger.setLevel( logging.INFO )    
@@ -70,6 +76,7 @@ class PlotMaker( ROOT.TNamed ):
         # Set to true or false the scaling
         # of all MC by the supplied Lumi
         self.__scaleMCByLumi = doScale
+
 
     def AddDataFile( self, filename ):
         self.logger.info( "AddDataFile: Adding data file: " + filename )
@@ -156,7 +163,8 @@ class PlotMaker( ROOT.TNamed ):
     def GetDataHist( self, hname ):
 
         # Return a list of data hists
-        
+        # Only uses: self.__datafiles
+
         result = None
         for dfile in self.__datafiles:
             tfile = ROOT.TFile.Open( dfile, "READ" )
@@ -173,11 +181,15 @@ class PlotMaker( ROOT.TNamed ):
                 pass
             tfile.Close()
             pass
+        if( self.__doHistRebin ):
+            self.__rebinHistogram( result, self.__newBins )
         return result
 
     def GetMCHists( self, hname ):
 
         # Return a dictionary of { name : hist }
+        # Only uses self.__mcsamples
+        # and self.__scaleMCByLumi
 
         result = {}
         #color = 1
@@ -202,13 +214,21 @@ class PlotMaker( ROOT.TNamed ):
             #typeHist.SetFillStyle( 1001 )
             #typeHist.SetFillColor( color )
             #color += 1
+            if( self.__scaleMCByLumi):
+                typeHist.Scale( self.__luminosity )
+            if( self.__doHistRebin ):
+                self.__rebinHistogram( typeHist, self.__newBins )
+
             result[ mctype ] = typeHist
             pass
         return result
 
     def GetBSMHists( self, hname ):
+
+        # Only uses self.__mcsamples
+        # and self.__scaleMCByLumi
+
         result = {}
-        lstyle = 1
         for bsmtype, files in self.__bsmsamples.iteritems():
             #files = self.__bsmsamples[ bsmtype ]
             typeHist = None
@@ -235,9 +255,55 @@ class PlotMaker( ROOT.TNamed ):
             #lstyle += 1
             #if lstyle == 9:
             #    lstyle = 2
+            # Scale by Lumi if necessary
+            if( self.__scaleMCByLumi):
+                typeHist.Scale( self.__luminosity )
+            if( self.__doHistRebin ):
+                self.__rebinHistogram( typeHist, self.__newBins )
             result[ bsmtype ] = typeHist
             pass
         return result
+
+
+
+    def __rebinHistogram( self, hist, bins ):
+        """
+        bins can be one of two things:
+        - A Single Number, in which case this determines
+           the factor by which bins are merged.  
+           ie, if bins == 2, there are half as many bins
+
+        - A list of bin boundaries.  It must be of 
+           length N+1, where N is the new number of 
+           of bins.  Each value must coorespond to 
+           an already existing bin edge (ie, this
+           only merges bins, but can do so to make
+           non-uniform binnings)
+
+        See: http://root.cern.ch/root/html/TH1.html#TH1:Rebin
+        """
+        self.logger.debug( "Rebinning %s " % hist)
+
+        type = len( [bins] )
+
+        if type  == 0:
+            self.logger.error( "No rebin paramaters supplied")
+            return
+
+        elif type == 1:
+            self.logger.debug( "Rebinning by a factor of %s" % bins)
+            hist.Rebin( bins, "" )
+            return
+
+        else:
+            # Can't yet get this to work
+            # Exiting with error, for now
+            self.logger.error( "Improper rebin paramater supplied")
+            return
+            nBins = len([bins]) - 1
+            self.logger.debug( "Rebinning with boundaries: ")
+            import array
+            hist.Rebin( nBins, "", array.array(bins) )
 
 
 ######################
@@ -283,11 +349,12 @@ class PlotMaker( ROOT.TNamed ):
 
             (stack, legend) = self.__DrawHistogram( hname, dhist, mchists, bsmhists )
 
-            if self.__useLogScale:
-                canvas.SetLogy()
-                canvas.Print( filename )
-
+            canvas.Print( filename, "Title:" + hname )
             pass
+
+
+        if self.__useLogScale:
+            canvas.SetLogy()
 
         canvas.Print(filename + "]");
 
@@ -300,15 +367,17 @@ class PlotMaker( ROOT.TNamed ):
         canvas = ROOT.TCanvas( hname + "_canvas", "", 800, 1000 )
         canvas.Divide(1,2, 0.01, 0.01)
 
-        canvas.cd(1).SetLogy()
+        if self.__useLogScale:
+            canvas.cd(1).SetLogy()
         
-        dhist = self.GetDataHist( hname )
-        mchists = self.GetMCHists( hname )
+        dhist    = self.GetDataHist( hname )
+        mchists  = self.GetMCHists( hname )
         bsmhists = self.GetBSMHists( hname )
 
         (stack, legend) = self.__DrawHistogram( hname, dhist, mchists, bsmhists )
 
-        canvas.cd(2).SetLogy()
+        if self.__useLogScale:
+            canvas.cd(2).SetLogy()
 
         (legend ) = self.__DrawProbabilityPlot( hname, bsmhists )
 
@@ -326,13 +395,12 @@ class PlotMaker( ROOT.TNamed ):
         # Retrieve the data and MC histograms:
 
         # Create the histogram representing the sum of all MC samples
-        # Seems like a strange loop, but okay:
         addedSamples = None
         for mctype, h1d in mchists.iteritems():
             # make projections and add them
             #h1d = mchists[ mctype ]
-            if( self.__scaleMCByLumi):
-                h1d.Scale( self.__luminosity )
+            
+
             if addedSamples:
                 addedSamples.Add ( h1d )
             else:
@@ -390,8 +458,6 @@ class PlotMaker( ROOT.TNamed ):
         # Draw the BSM histograms one-by-one and draw the legend:
         for bsmtype, bsmhist in bsmhists.iteritems():
             #bsmhist = bsmhists[ bsmtype ]
-            if( self.__scaleMCByLumi):
-                bsmhist.Scale( self.__luminosity )
             if bsmtype in self.__colors:
                 color = self.__colors[ bsmtype ]
             else:
