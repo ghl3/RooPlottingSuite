@@ -38,6 +38,8 @@ class PlotMaker( ROOT.TNamed ):
 
         self.__luminosity = 1.0
         self.__scaleMCByLumi = False
+        self.__AtlasLabel = True
+        self.__useLogScale = False
 
         # colors for stacks
         #  self.__defaultcolors = [ 2,3,4,5,6,7,8,9 ] # simple choice (high intensity)
@@ -56,12 +58,13 @@ class PlotMaker( ROOT.TNamed ):
     def SetLevelDebug( self ) :
         self.logger.setLevel( logging.DEBUG )    
 
+    def SetAtlasLabel( self, set ) :
+        self.__AtlasLabel = set
 
     def ScaleMCByLumi( self, doScale=True ):
         # Set to true or false the scaling
         # of all MC by the supplied Lumi
         self.__scaleMCByLumi = doScale
-
 
     def AddDataFile( self, filename ):
         self.logger.info( "AddDataFile: Adding data file: " + filename )
@@ -117,7 +120,6 @@ class PlotMaker( ROOT.TNamed ):
         for file in FileList:
             self.AddDataFile( file )
 
-
     def SetLegendSize( self, lowX, lowY, highX, highY ):
         self.__legendLowX = lowX
         self.__legendLowY = lowY
@@ -140,102 +142,10 @@ class PlotMaker( ROOT.TNamed ):
         del usedcolors[ : ]
         return GetDefaultColor( usedcolors )
 
-    def PlotHistogram( self, hname, filename ):
-        # Retrieve the data and MC histograms:
-        dhist = self.GetDataHist( hname )
-        mchists = self.GetMCHists( hname )
-        bsmhists = self.GetBSMHists( hname )
-
-        # Create the histogram representing the sum of all MC samples
-        addedSamples = None
-        for mctype in mchists.keys():
-            # make projections and add them
-            h1d = mchists[ mctype ]
-            if( self.__scaleMCByLumi):
-                h1d.Scale( self.__luminosity )
-            if addedSamples:
-                addedSamples.Add ( h1d )
-            else:
-                addedSamples = h1d.Clone()
-            pass
-
-        maximum = max( [ addedSamples.GetMaximum(), dhist.GetMaximum() ] + \
-                       [ bsmhists[ bsmtype ].GetMaximum() for bsmtype in bsmhists.keys() ] )
-        maximum *= 1.4
-        # Create a canvas:
-        canvas = ROOT.TCanvas( hname + "_canvas", "Canvas for plot making",
-                               800, 600 )
-        canvas.cd()
-        # Plot the data first:
-        dhist.SetMaximum( maximum )
-        dhist.Draw()
-
-        # Create a stack of the MC histograms:
-        stack = ROOT.THStack( hname + "_mcstack", "Stacked MC histograms" )
-        # Every element should be a list of the form [histo, "name", "style"]
-        legendEntries = []
-        # Now draw the MC histograms one by one:
-
-        usedcolors = []
-        #color = 2
-        for mctype in mchists.keys():
-            mchist = mchists[ mctype ]
-            color = self.__mccolors[ mctype ]
-            if( color == None ) :
-                color = self.GetDefaultColor( usedcolors )
-            mchist.SetFillColor(color)
-            mchist.SetLineColor(color)
-            stack.Add( mchist )
-            stack.Draw( "HIST SAME" )
-            legendEntries.append( [mchist, mctype, "f"] )
-            self.logger.debug( "Adding mc histogram to stack: %s (color = %d )" % (mctype, color) )
-            pass
-
-        # Draw the data points again:
-        dhist.Draw( "SAME" )
-
-        # Create a legend for the plot:
-        legend = ROOT.TLegend( self.__legendLowX, self.__legendLowY,
-                               self.__legendHighX, self.__legendHighY )
-        legend.AppendPad()
-        legend.SetFillStyle( 0 )
-        legend.AddEntry( dhist, "data", "lpe" )
-        # show the stacked histograms in the same order
-        legendEntries.reverse()
-        for e in legendEntries: legend.AddEntry( e[0], e[1], e[2] )
-
-        # Draw the BSM histograms one-by-one and draw the legend:
-        lstyle = 2
-
-        for bsmtype in bsmhists.keys():
-            bsmhist = bsmhists[ bsmtype ]
-            if( self.__scaleMCByLumi):
-                bsmhist.Scale( self.__luminosity )
-            color = self.__mccolors[ bsmtype ]
-            if( color == None ) :
-                color = self.GetDefaultColor( usedcolors )
-            bsmhist.SetLineColor( color )
-            bsmhist.SetLineStyle( lstyle )
-            self.logger.debug( "Adding bsm histogram to stack: %s (color = %d, lstyle = %d )" % (bsmtype, color, lstyle) )
-            bsmhist.Draw( "HIST SAME" )
-            legend.AddEntry( bsmhist, bsmtype, "l" )
-            lstyle += 1
-            if lstyle == 9:
-                lstyle = 2
-                pass
-            pass
-        legend.Draw()
-
-        # Add the ATLAS notations:
-        import AtlasUtil
-        AtlasUtil.AtlasLabel( 0.20, 0.85 )
-        AtlasUtil.DrawLuminosity( 0.20, 0.76, self.__luminosity )
-        # Now create the plot:
-        canvas.SaveAs( filename )
-        return
-
-
     def GetDataHist( self, hname ):
+
+        # Return a list of data hists
+        
         result = None
         for dfile in self.__datafiles:
             tfile = ROOT.TFile.Open( dfile, "READ" )
@@ -255,6 +165,9 @@ class PlotMaker( ROOT.TNamed ):
         return result
 
     def GetMCHists( self, hname ):
+
+        # Return a dictionary of { name : hist }
+
         result = {}
         #color = 1
         for mctype in self.__mcsamples.keys():
@@ -316,10 +229,114 @@ class PlotMaker( ROOT.TNamed ):
         return result
 
 
-
 ######################
 # plot 1D histograms #
 ######################
+
+    def PlotHistogram( self, hname, filename ):
+        # Retrieve the data and MC histograms:
+        dhist = self.GetDataHist( hname )
+        mchists = self.GetMCHists( hname )
+        bsmhists = self.GetBSMHists( hname )
+
+        # Create the histogram representing the sum of all MC samples
+        # Seems like a strange loop, but okay:
+        addedSamples = None
+        for mctype in mchists.keys():
+            # make projections and add them
+            h1d = mchists[ mctype ]
+            if( self.__scaleMCByLumi):
+                h1d.Scale( self.__luminosity )
+            if addedSamples:
+                addedSamples.Add ( h1d )
+            else:
+                addedSamples = h1d.Clone()
+            pass
+
+        maximum = max( [ addedSamples.GetMaximum(), dhist.GetMaximum() ] + \
+                       [ bsmhists[ bsmtype ].GetMaximum() for bsmtype in bsmhists.keys() ] )
+        maximum *= 1.4
+
+        # Create a canvas:
+        canvas = ROOT.TCanvas( hname + "_canvas", "Canvas for plot making",
+                               800, 600 )
+        canvas.cd()
+        # Plot the data first:
+        dhist.SetMaximum( maximum )
+        dhist.Draw()
+
+        # Create a stack of the MC histograms:
+        stack = ROOT.THStack( hname + "_mcstack", "Stacked MC histograms" )
+        # Every element should be a list of the form [histo, "name", "style"]
+
+        # Now draw the MC histograms one by one:
+        legendEntries = []
+        usedcolors = []
+        #color = 2
+        for mctype in mchists.keys():
+            mchist = mchists[ mctype ]
+            color = self.__mccolors[ mctype ]
+            if( color == None ) :
+                color = self.GetDefaultColor( usedcolors )
+            mchist.SetFillColor(color)
+            mchist.SetLineColor(color)
+            stack.Add( mchist )
+            stack.Draw( "HIST SAME" )
+            legendEntries.append( [mchist, mctype, "f"] )
+            self.logger.debug( "Adding mc histogram to stack: %s (color = %d )" % (mctype, color) )
+            pass
+
+        # Draw the data points again:
+        dhist.Draw( "SAME" )
+
+        # Create a legend for the plot:
+        legend = ROOT.TLegend( self.__legendLowX, self.__legendLowY,
+                               self.__legendHighX, self.__legendHighY )
+        legend.AppendPad()
+        legend.SetFillStyle( 0 )
+
+        legend.AddEntry( dhist, "data", "lpe" )
+        # show the stacked histograms in the same order
+        legendEntries.reverse()
+        for e in legendEntries: legend.AddEntry( e[0], e[1], e[2] )
+
+        # Draw the BSM histograms one-by-one and draw the legend:
+        lstyle = 2
+
+        for bsmtype in bsmhists.keys():
+            bsmhist = bsmhists[ bsmtype ]
+            if( self.__scaleMCByLumi):
+                bsmhist.Scale( self.__luminosity )
+            color = self.__mccolors[ bsmtype ]
+            if( color == None ) :
+                color = self.GetDefaultColor( usedcolors )
+            bsmhist.SetLineColor( color )
+            bsmhist.SetLineStyle( lstyle )
+            self.logger.debug( "Adding bsm histogram to stack: %s (color = %d, lstyle = %d )" % (bsmtype, color, lstyle) )
+            bsmhist.Draw( "HIST SAME" )
+            legend.AddEntry( bsmhist, bsmtype, "l" )
+            lstyle += 1
+            if lstyle == 9:
+                lstyle = 2
+                pass
+            pass
+        legend.Draw()
+
+        # Add the ATLAS notations:
+        if self.__AtlasLabel:
+            import AtlasUtil
+            AtlasUtil.AtlasLabel( 0.20, 0.85 )
+            AtlasUtil.DrawLuminosity( 0.20, 0.76, self.__luminosity )
+
+        # Now create the plot:
+        canvas.SaveAs( filename )
+        return
+
+
+
+################################
+# plot 1D histogram with Extra #
+################################
 
     def Draw1Dhistogram( self, hname, filename, hTitle="", plotSigMC=True, leftMargin=0.15, rightMargin=0.15):
         # Retrieve the data and MC histograms:
@@ -369,11 +386,11 @@ class PlotMaker( ROOT.TNamed ):
         hData.Draw()
 
         # Create a legend for the plot:
-#         legend1 = ROOT.TLegend( self.__legendLowX, self.__legendLowY,
-#                                self.__legendHighX, self.__legendHighY )
+        # legend1 = ROOT.TLegend( self.__legendLowX, self.__legendLowY,
+        #                         self.__legendHighX, self.__legendHighY )
         legend1 = ROOT.TLegend( 0.72, 0.55, 0.97, 0.99 )
         legend1.AppendPad()
-#        legend1.SetFillStyle( 0 )
+        # legend1.SetFillStyle( 0 )
         legend1.SetFillColor( 0 )
         legend1.AddEntry( hData, "data", "lpe" )
 
@@ -413,7 +430,6 @@ class PlotMaker( ROOT.TNamed ):
         import AtlasUtil
         AtlasUtil.AtlasLabel( 0.17, 0.85 )
         AtlasUtil.DrawLuminosity( 0.17, 0.76, self.__luminosity )
-
 
         if plotSigMC:
             cv.cd(2).SetLogy()
@@ -477,6 +493,7 @@ class PlotMaker( ROOT.TNamed ):
         ROOT.gStyle.SetPadLeftMargin(lMargin)
 
         return
+
 
 ###############################
 
