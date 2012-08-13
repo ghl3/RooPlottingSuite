@@ -4,7 +4,7 @@
 # out of already-produced histograms.  In particular, it is designed to 
 # create plots that compare data with predictions (from Monte-Carlo or otherwise)
 #
- 
+
 import sys
 import glob
 import logging #log
