@@ -46,5 +46,3 @@ A set of tools for making plots using ROOT histograms
 # up an input ROOT file and makes
 # plots of all histograms in that file
 
-
-
