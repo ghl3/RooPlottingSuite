@@ -5,151 +5,262 @@
 # create plots that compare data with predictions (from Monte-Carlo or otherwise)
 #
 
-import ROOT
+import sys
 import glob
-import log, logging
+import logging #log
+import copy
+import itertools
+import random
+
+# Import native OrderedDict, or use
+# local version for python < 2.7
+if sys.version_info >= (2, 7):
+    from collections import OrderedDict
+else:
+    from OrderedDict import *
+
+from helpers.MakeStack import *
+from helpers.MakeMCStack import *
+from helpers.MakeMCDataStack import *
+from helpers.MakeMultiplePlot import *
+from helpers.MakeQuotientPlot import *
+from helpers.MakeMultipleTH1Plot import *
+from helpers.MakeLatexTable import *
+
+import ROOT
+from HistCollector import *
+
 
 class PlotMaker( ROOT.TNamed ):
+    """ The main class to set samples and generate plots
+
+    This class is used to generate nicely formatted plots by
+    combining a number of ROOT files which contain histograms.
+
+
+    The class holds a vector of samples which
+    it divides into:
+    * data
+    * mc  (monte carlo)
+    * bsm (beyond-the-standard-model like samples)
+    
+    The distinction (and naming conventions) is simply
+    a matter of plotting
+
+    These can be set using the methods:
+
+    :py:meth:`~PlotMaker.PlotMaker.AddMCSample`
+    :py:meth:`~PlotMaker.PlotMaker.AddDataSample`
+    :py:meth:`~PlotMaker.PlotMaker.AddBSMSample`
+
+    Once these are set, one can automatically generate
+    plots combining those samples using the PlotMaker's
+    plotting methods.  For example, one can run:
+
+    :py:meth:`~PlotMaker.PlotMaker.MakeMCDataStack`
+
+    This will extract the histogram named 'hist' from each
+    sample and will plot them and save them to "myPlot.pdf"
+
+    One can specify a number of samples to use (this must be
+    a subset of the number of already added samples) using the
+    "sampleList" keyword argument.  It takes a list of strings
+    representing the names of the samples.  This structure is 
+    repeated for all of the plot-making methods.
+
+
+    The underlying functionality of the class works by passing
+    around "JSON" like python dictionaries specifying a list of
+    plots to be made and how they are to be styled
+
+    PlotDescription:
+    { "Name" : "myName", "File" : "FileString", 
+    "FileList" : [ ListOfFiles (obtained via glob) ],
+    "MarkerColor" : "myMarkerColor", "LineStyle" : "myLineStyle"}
+
+    The FileList should be a glob of the FileString...
+    This is done automatically upon adding the sample, 
+    and store both in case it's necessary...
+
+    The mcsamples and bsmsamples
+    are dictionaries (only to make nicer code)
+    { "NameA" : {PlotDescriptionA}, "NameB" : {PlotDescriptionB} }
+
+    
+    All functions to create plots can be provided
+    keyword arguments to modify the style of
+    drawn plots. See: :py:func:`~helpers.tools.ParseOptionalArgs`
+
+
+    """
 
     def __init__( self, name = "PlotMaker", title = "Plot maker object" ):
 
-        # Initialise the base class:
+        #Initialise the base class:
         ROOT.TNamed.__init__( self, name, title )
+
+        # Initialize the logger
+        FORMAT = "%(levelname)s  %(message)s"
+        logging.basicConfig( level=logging.INFO, format=FORMAT )
+
         self.SetName( name )
         self.SetTitle( title )
-        self.logger = log.getLogger( name )
+        self.logger = self.getLogger( name )
         self.logger.setLevel( logging.INFO )
 
-        # Initialize the internal variables:
-        self.__datafiles = []
-        self.__mcsamples = {}
-        self.__bsmsamples = {}
-        self.__colors = {}
-        self.__linestyles = {}
+        # Tell ROOT to use this style:
+        from style.AtlasStyle import AtlasStyle
+        style = AtlasStyle()
+        ROOT.gROOT.SetStyle( style.GetName() )
+        ROOT.gROOT.ForceStyle()
+        ROOT.TGaxis.SetMaxDigits( 4 )
 
-        self.__legendLowX = 0.65
-        self.__legendLowY = 0.5
-        self.__legendHighX = 0.9
-        self.__legendHighY = 0.9
+        # Create the caching class
+        self.histCache = HistCollector()
+        self.requestCache = []
 
-        self.__2DlegendLowX = 0.62
-        self.__2DlegendLowY = 0.82
-        self.__2DlegendHighX = 0.85
-        self.__2DlegendHighY = 0.99
+        # Use OrderedDicts
+        self.__datasamples  = OrderedDict()
+        self.__mcsamples    = OrderedDict()
+        self.__bsmsamples   = OrderedDict()
 
-        self.__luminosity = 1.0
-        self.__scaleMCByLumi = False
-        self.__AtlasLabel = True
-        self.__useLogScale = False
-        self.__doHistRebin = False
+        # Default Legend Values
+        self.__legendLowX  = 0.75
+        self.__legendLowY  = 0.70
+        self.__legendHighX = 0.95
+        self.__legendHighY = 0.90
+
+        self.__luminosity    = 1.0
+        self.__scaleMCByLumi = True
+        self.__AtlasLabel    = True
+        self.__useLogScale   = False
+        self.__doHistRebin   = False
         self.__newBins = None
 
+        self.__outputDir = ""
 
-        # colors for stacks
-        #  self.__defaultcolors = [ 2,3,4,5,6,7,8,9 ] # simple choice (high intensity)
-        #  self.__defaultcolors = [40,41,46,38,33,30,20,7,8,9,32,25,28] # dark colors
-        self.__defaultcolors = [4,3,2,5,6,40,41,46,38,33,30,20,7,8,9] # bright colors
+        self.__defaultcolors     = [29,34,30,33,38,46,41,40,14,21,47,49,9,43,23,45]+[34,46,43,30,31,44,42,47,29,45,33,36,35,27,32,41,39,38,26,37,48,40]+[4,3,2,6,38,33,20,7,8] 
+        self.__defaultlinestyles = [4,3,2,5,6,40,41,46,38,33,30,20,7,8,9] # bright colors
+
         return
 
+    #
+    # Simple configuration methods
+    #
 
-#    def SetLoggerLevel( self, level ) :
-#        self.__logger.setLevel( level )
-
+    def getLogger( self, name ):
+        # Set the format of the log messages:
+        FORMAT = 'Py:%(name)-25s  %(levelname)-8s  %(message)s'
+        import logging
+        logging.basicConfig( format = FORMAT )
+        # Create the logger object:
+        logger = logging.getLogger( name )
+        logger.setLevel( logging.INFO )
+        return logger
 
     def RebinHistograms( self, bins ):
+        """ Rebin histograms 
+
+        NOT YET FULLY IMPLEMENTED
+        """
         self.__doHistRebin = True
         self.__newBins = bins
 
     def SetLevelInfo( self ) :
-        self.logger.setLevel( logging.INFO )    
+        """ Set the level of the logging to INFO 
+
+        """
+        logging.basicConfig( level=logging.INFO )
+        #self.logger.setLevel( logging.INFO )    
 
     def SetLevelDebug( self ) :
-        self.logger.setLevel( logging.DEBUG )    
+        """ Set the level of the logging to DEBUG
+
+        """
+        logging.basicConfig( level=logging.DEBUG )
+        #self.logger.setLevel( logging.DEBUG )    
 
     def SetAtlasLabel( self, set ) :
+        """ Set whether to include the ATLAS label
+       
+        Takes "True" or "False"
+        """
         self.__AtlasLabel = set
 
     def UseLogScale( self, useLogScale ) :
+        """ Set whether to use log scale on the y-axis
+
+        Takes "True" or "False"
+        """
         self.__useLogScale = useLogScale
 
     def ScaleMCByLumi( self, doScale=True ):
-        # Set to true or false the scaling
-        # of all MC by the supplied Lumi
+        """ Scale all MC by the global Lumi Value
+
+        Set to true or false the scaling
+        of all MC by the supplied Lumi
+        """
         self.__scaleMCByLumi = doScale
 
-
-    def AddDataFile( self, filename ):
-        self.logger.info( "AddDataFile: Adding data file: " + filename )
-        self.__datafiles += [ filename ]
-        return
-
-    def AddMCFile( self, mctype, filename, color=None, linestyle=0 ):
-        self.logger.info( "AddMCFile:  Adding Monte Carlo file: " + filename + " (" + mctype + ")" )
-        if color != None:
-            self.__colors[ mctype ] = color
-        if linestyle != None:
-            self.__linestyles[ mctype ] = linestyle
-        if mctype in self.__mcsamples.keys():
-            self.__mcsamples[ mctype ] += [ filename ]
-        else:
-            self.__mcsamples[ mctype ]  = [ filename ]
-            pass
-        return
-
-    def AddBSMFile( self, bsmtype, filename, weight=1.0, color=None, linestyle=None ):
-        self.logger.info( "AddBSMFile:  Adding BSM file: " + filename + " (" + bsmtype + "," + str( weight ) + ")" )
-        if color != None:
-            self.__colors[ bsmtype ] = color
-        if linestyle != None:
-            self.__linestyles[ bsmtype ] = linestyle
-        if bsmtype in self.__bsmsamples.keys():
-            self.__bsmsamples[ bsmtype ] += [ [ filename, weight ] ]
-        else:
-            self.__bsmsamples[ bsmtype ]  = [ [ filename, weight ] ]
-            pass
-        return
-
+    def SetOutputDir( self, outputDir ) :
+        self.__outputDir = outputDir
     
-    def AddMultipleMCFiles( self, mctype, fileExpression, color=None ):
-        
-        # Take a RegEx and use glob to
-        # add multiple files at once
-        
-        FileList = glob.glob( fileExpression )
-        
-        if len( FileList ) == 0 :
-            self.logger.warning( "No files added from: %s" % fileExpression )
-            return
-            
-        for file in FileList:
-            self.AddMCFile( mctype, file, color )
-                
-    def AddMultipleDataFiles( self, fileExpression ):
-        
-        # Take a RegEx and use glob to
-        # add multiple files at once
-                    
-        FileList = glob.glob( fileExpression )
-        
-        if len( FileList ) == 0 :
-            self.logger.warning("No files added from: %s " % fileExpression)
-            return
+    def GetConfigurationState(self):
+        """ Return a dictionary of the config state
 
-        for file in FileList:
-            self.AddDataFile( file )
+        This method is to be used internally.
 
-    def SetLegendSize( self, lowX, lowY, highX, highY ):
+        Go through the current properties of this
+        class and pack them into a dictionary.
+        Return that dictionary.
+        """
+        ConfigState = {}
+
+        ConfigState["UseLogScale"]   = self.__useLogScale
+        ConfigState["ScaleMCByLumi"] = self.__scaleMCByLumi
+        ConfigState["OutputDir"]     = self.__outputDir
+        ConfigState["Lumi"]          = self.__luminosity
+
+        ConfigState["LegendBoundaries"] = (self.__legendLowX,  self.__legendLowY, 
+                                           self.__legendHighX, self.__legendHighY)
+
+        return ConfigState
+
+
+
+    def SetLegendBoundaries( self, lowX, lowY, highX, highY ):
+        """ Set the boundaries of the global legend object
+
+        Takes (x0, y0, x1, y1)
+        """
         self.__legendLowX = lowX
         self.__legendLowY = lowY
         self.__legendHighX = highX
         self.__legendHighY = highY
         return
+    def SetLegendSize( self, lowX, lowY, highX, highY ):
+        """ Backward Compatability """
+        SetLegendBoundaries( lowX, lowY, highX, highY )
+        
 
     def SetLuminosity( self, luminosity ):
+        """ Set the global luminosity object
+
+        If requested, all MC will be scaled by this value
+        """
         self.__luminosity = luminosity
         return
 
+    def SetLumi( self, luminosity ):
+        """ Just a reference to :py:meth:`~PlotMaker.PlotMaker.SetLuminosity`
+
+        """
+        self.SetLuminosity( luminosity)
+
     def GetDefaultColor( self, usedcolors ) :
+        """ An internal method for choosing a default color
+
+        """
         for color in self.__defaultcolors:
             if color not in usedcolors:
                 usedcolors.append( color )
@@ -160,858 +271,1503 @@ class PlotMaker( ROOT.TNamed ):
         del usedcolors[ : ]
         return GetDefaultColor( usedcolors )
 
-    def GetDataHist( self, hname ):
 
-        # Return a list of data hists
-        # Only uses: self.__datafiles
+    #
+    # Sample adding methods
+    #
 
-        result = None
-        for dfile in self.__datafiles:
-            tfile = ROOT.TFile.Open( dfile, "READ" )
-            if not file:
-                raise IOError( 1, "File '" + dfile + "' could not be opened" )
-            dhist = tfile.Get( hname )
-            if not dhist:
-                raise IOError( 5, "Histogram '" + hname + "' not found in file '" + dfile + "'" )
-            if not result:
-                ROOT.gROOT.cd()
-                result = dhist.Clone( hname + "_data" )
-            else:
-                result.Add( dhist )
-                pass
-            tfile.Close()
-            pass
-        if( self.__doHistRebin ):
-            self.__rebinHistogram( result, self.__newBins )
-        return result
+    def AddDataSample( self, name, files, title=None ):
+        """ Add a Data Sample 
 
-    def GetMCHists( self, hname ):
-
-        # Return a dictionary of { name : hist }
-        # Only uses self.__mcsamples
-        # and self.__scaleMCByLumi
-
-        result = {}
-        #color = 1
-        for mctype, mcfiles in self.__mcsamples.iteritems():
-            #mcfiles = self.__mcsamples[ mctype ]
-            typeHist = None
-            for mcfile in mcfiles:
-                tfile = ROOT.TFile.Open( mcfile, "READ" )
-                if not tfile:
-                    raise IOError( 1, "File '" + mcfile + "' could not be opened" )
-                mchist = tfile.Get( hname )
-                if not mchist:
-                    raise IOError( 5, "Histogram '" + hname + "' not found in file '" + mcfile + "'" )
-                if not typeHist:
-                    ROOT.gROOT.cd()
-                    typeHist = mchist.Clone( hname + "_" + mctype )
-                else:
-                    typeHist.Add( mchist )
-                    pass
-                tfile.Close()
-                pass
-            #typeHist.SetFillStyle( 1001 )
-            #typeHist.SetFillColor( color )
-            #color += 1
-            if( self.__scaleMCByLumi):
-                typeHist.Scale( self.__luminosity )
-            if( self.__doHistRebin ):
-                self.__rebinHistogram( typeHist, self.__newBins )
-
-            result[ mctype ] = typeHist
-            pass
-        return result
-
-    def GetBSMHists( self, hname ):
-
-        # Only uses self.__mcsamples
-        # and self.__scaleMCByLumi
-
-        result = {}
-        for bsmtype, files in self.__bsmsamples.iteritems():
-            #files = self.__bsmsamples[ bsmtype ]
-            typeHist = None
-            for bsmfile in files:
-                tfile = ROOT.TFile.Open( bsmfile[ 0 ], "READ" )
-                if not tfile:
-                    raise IOError( 1, "File '" + bsmfile[ 0 ] + "' could not be opened" )
-                hist = tfile.Get( hname )
-                if not hist:
-                    raise IOError( 5, "Histogram '" + hname + "' not found in file '" + bsmfile[ 0 ] + "'" )
-                # Rescale the histogram with the specified weight:
-                hist.Scale( bsmfile[ 1 ] )
-                if not typeHist:
-                    ROOT.gROOT.cd()
-                    typeHist = hist.Clone( hname + "_" + bsmtype )
-                else:
-                    typeHist.Add( hist )
-                    pass
-                tfile.Close()
-                pass
-            #typeHist.SetFillStyle( 0 )
-            #typeHist.SetLineStyle( lstyle )
-            #typeHist.SetLineColor( lstyle )
-            #lstyle += 1
-            #if lstyle == 9:
-            #    lstyle = 2
-            # Scale by Lumi if necessary
-            if( self.__scaleMCByLumi):
-                typeHist.Scale( self.__luminosity )
-            if( self.__doHistRebin ):
-                self.__rebinHistogram( typeHist, self.__newBins )
-            result[ bsmtype ] = typeHist
-            pass
-        return result
-
-
-
-    def __rebinHistogram( self, hist, bins ):
+        Supply it a name and a file (or list of files using '*')
         """
-        bins can be one of two things:
-        - A Single Number, in which case this determines
-           the factor by which bins are merged.  
-           ie, if bins == 2, there are half as many bins
 
-        - A list of bin boundaries.  It must be of 
-           length N+1, where N is the new number of 
-           of bins.  Each value must coorespond to 
-           an already existing bin edge (ie, this
-           only merges bins, but can do so to make
-           non-uniform binnings)
+        self.logger.info( "AddDataFile: Adding data file: " + files )
 
-        See: http://root.cern.ch/root/html/TH1.html#TH1:Rebin
+        # Glob the files
+        FileList = glob.glob( files )
+
+        if title==None:
+            title=name
+
+        # Create the dictionary
+        info = { "Name" : name, "Files" : files, "Title" : title, 
+                 "FileList" : FileList, "Type" : "DATA", "ScaleByLumi" : False }
+
+        if name not in self.__datasamples:
+            self.__datasamples[name] = info
+        else:
+            self.__datasamples[name]["FileList"].extend( FileList )
+        pass
+
+        return
+
+
+    def AddMCSample( self, name, files, color=None, title=None, linestyle=0, signal=None, 
+                     Scale=None, ScaleByLumi=True ):
+        """ Add a MC Sample 
+
+        Supply it a name, a file (or list of files using '*')
+        Optionally supply a color and a linestyle
         """
-        self.logger.debug( "Rebinning %s " % hist)
 
-        type = len( [bins] )
+        self.logger.info( "AddMCFile:  Adding Monte Carlo file: " + files + " (" + name + ")" )
 
-        if type  == 0:
-            self.logger.error( "No rebin paramaters supplied")
-            return
+        # Pick a random color if none supplied
+        if color == None:
+            color = self.GetNotUsedColor() # HARD CODED FOR NOW...!
+        if linestyle == None:
+            linestyle = 1 # HARD CODED FOR NOW...!
 
-        elif type == 1:
-            self.logger.debug( "Rebinning by a factor of %s" % bins)
-            hist.Rebin( bins, "" )
-            return
+        if title==None:
+            title=name
+        
+        # Glob the files
+        FileList = glob.glob( files )
+
+        # Check if this sample has already been added:
+        if name in self.__mcsamples:
+            sample = self.__mcsamples[name]
+            sample["FileList"].extend( FileList )
+
+        # Otherwise, create the sample
+        else:
+            info = { "Name" : name, "Files" : files, "FileList" : FileList, 
+                     "Title" : title, "Scale" : Scale, "Color" : color, 
+                     "LineStyle" : linestyle, "Signal" : signal, "Type" : "MC",
+                     "ScaleByLumi" : ScaleByLumi }
+            self.__mcsamples[name] = info
+
+        return
+
+
+    def AddBSMSample( self, name, files, color=None, title=None, linestyle=0, Scale=None ):
+        """ Add a BSM Sample 
+
+        Supply it a name, a file (or list of files using '*' )
+        Optionally supply a color and a linestyle
+        """
+
+        self.logger.info( "AddBSMFile:  Adding BSM Monte Carlo file: " + files + " (" + name + ")" )
+
+        # Pick a random color if none supplied
+        if color == None:
+            color = self.GetNotUsedColor() # HARD CODED FOR NOW...!
+        if linestyle == None:
+            linestyle = 1 # HARD CODED FOR NOW...!
+
+        if title==None:
+            title=name
+
+        # Glob the files
+        FileList = glob.glob( files )
+
+        # Check if this sample has already been added:
+        if name in self.__bsmsamples:
+            sample = self.__bsmsamples[name]
+            sample["FileList"].extend( FileList )
+
+        # Otherwise, create the sample
+        else:
+            info = { "Name" : name, "Files" : files, "FileList" : FileList, "Scale" : Scale, "ScaleByLumi" : True,
+                     "Title" : title, "Color" : color, "LineStyle" : linestyle, "Type" : "BSM" }
+            self.__bsmsamples[name] = info
+
+        return
+
+
+    def PrintAllSamples(self):
+        """ Print all samples
+
+        Meant for debugging
+        """
+        print "Data Samples:"
+        for name, sample in self.__datasamples.iteritems():
+            for (key, val) in sample.iteritems():
+                print " %s : %s " % (key, val),
+            print "\n"
+            pass
+        print ""
+
+        print "MC Samples:"
+        for name, sample in self.__mcsamples.iteritems():
+            for key, val, in sample.iteritems():
+                print " %s : %s " % (key, val),
+            print "\n"
+            pass
+        print ""
+
+        print "BSM Samples:"
+        for name, sample in self.__bsmsamples.iteritems():
+            for key, val in sample:
+                print key, val
+        print ""
+
+
+    def PrintRequestCache(self):
+        """ Print the contents of the request cache
+
+        Meant for debugging
+        """
+        for cache in self.requestCache:
+            print cache
+            
+        return
+
+
+    def GetNotUsedColor( self ):
+        """ Get a color if one isn't already supplied
+
+        Used internally
+        """
+        usedcolors = []
+        for sample in self.__mcsamples.values() + self.__bsmsamples.values():
+            usedcolors.append( sample["Color"] )
+        
+        for color in self.__defaultcolors:
+            if color not in usedcolors:
+                return color
+            pass
+        
+        # Else, have to throw random numbers
+        for i in range( 100 ):
+            color = int( random.random()*100 )
+            if color not in usedcolors:
+                return color
+            pass
+        
+        return 1
+
+
+    def GetPlot( self, sampleName ) :
+        """ Find a stored sample and return a deepcopy
+
+        """
+        plot = None
+
+        if sampleName in self.__mcsamples:
+            plot = copy.deepcopy( self.__mcsamples[ sampleName ] )
+
+        elif sampleName in self.__bsmsamples:
+            plot = copy.deepcopy( self.__bsmsamples[ sampleName ] )
+
+        elif sampleName in self.__datasamples:
+            plot = copy.deepcopy( self.__datasamples[ sampleName ] )
 
         else:
-            # Can't yet get this to work
-            # Exiting with error, for now
-            self.logger.error( "Improper rebin paramater supplied")
-            return
-            nBins = len([bins]) - 1
-            self.logger.debug( "Rebinning with boundaries: ")
-            import array
-            hist.Rebin( nBins, "", array.array(bins) )
+            print "Error: Sample %s not found in either MC or data" % sampleName
+            raise Exception("GetSample - Sample")
+
+        return plot
 
 
-######################
-# plot 1D histograms #
-######################
+
+    def GetListOfPlots( self, sample_dict_list, sample_list=[]) :
+        """ Return a list of 'Plots' based on the 
+        input dictionaries and the sample_list
+
+
+        Loop through the internally held samples, 
+        get the ones that are requested, 
+        add any options to the 'plot' dictionary,
+        and return the list of plot dictionaries
+
+        Each plot in the returned list of plots should
+        be updated with global plotRequests and should
+        have a histogram be added
+        """
+
+        plot_list = []
+
+        # Make a merged sample dictionary
+        # Be sure to Maintain Order
+        available_samples = OrderedDict()
+        for dict in sample_dict_list:
+            for (key, val) in dict.iteritems():
+                available_samples[key] = val
+            pass
+
+        # If the sample list is empty, use all samples
+        if sample_list == []:
+            for name, sample in available_samples.iteritems(): 
+                plot = copy.deepcopy(sample)
+                plot_list.append( plot )
+            pass
+
+        else:
+
+            # Reverse the sample list
+            sample_list = sample_list[::-1]
+            #sample_list.reverse() #reversed(sample_list)
+
+            # Check if the sample is even valid
+            all_samples = []
+            all_samples.extend( self.__datasamples.keys() )
+            all_samples.extend( self.__mcsamples.keys() )
+            all_samples.extend( self.__bsmsamples.keys() )
+
+            # Check that all requested samples are actually valid
+            for sample in sample_list:
+                if sample not in all_samples: #( key for dict in all_samples for (key,val) in dict.iteritems() ):
+                    print "Error: Sample %s doesn't exist" % sample
+                    raise Exception("Invalid Sample Requested")
+
+            for name in sample_list:
+                if name not in available_samples: continue
+                sample = available_samples[name]
+                plot = copy.deepcopy(sample)
+                plot_list.append( plot )
+
+        '''
+        for sample_dict in sample_dict_list:
+            for name, sample in sample_dict.iteritems():
+                if sample_list != [] and name not in sample_list: continue
+                plot = copy.deepcopy(sample)
+                plot_list.append( plot )
+            pass
+        '''
+
+        if len(plot_list) == 0:
+            print "Error: No histograms from sampleList found."
+            raise Exception("No Histograms Found")
+
+        return plot_list
+
+
+
+    #
+    # The methods used to make plots
+    #
+
+    def MakeSamplePlot( self, histName, sampleName, outputName="", cache=False, **kwargs ):
+        """ Make a plot of a given histogram for a given sample
+
+        For a particular sample given by the sampleName,
+        make a plot of the given hist.
+        """
+
+        # Parse the optional arguments
+        ( requestOptions, plotOptions ) = ParseOptionalArgs( kwargs )
+
+        # Create a default name if necessary
+        if outputName == "":
+            modHistName = histName.replace('/','_')
+            outputName = "%s_%s.%s" % (sampleName, modHistName, kind)
+
+        request = {}
+        request.update( self.GetConfigurationState() )
+        request.update( requestOptions )
+        #request["Lumi"] = self.__luminosity
+        request["Plots"] = []
+
+        #foundSample = False
+
+        #plotTemplate = self.GetSample( sampleName ) #None
+        #plot = copy.deepcopy( plotTemplate )
+        plot = self.GetPlot( sampleName )
+        plot.update( plotOptions )
+        plot["Hist"]  = histName
+        request["Plots"].append( plot )
+        request["Type"] = "SamplePlot"
+        request["OutputName"] = outputName
+
+        if cache:
+            self.requestCache.append( request )
+        else:
+            MakeMultiplePlot( outputName, request );
+
+        return
+
+
+    def MakeEfficiencyPlot( self, numerator, denominator, sampleName, outputName="", cache=False, **kwargs):
+        """ Make a plot of the quotient of two histograms
+
+        This function calls :py:meth:`helpers.MakeQuotientPlot.MakeQuotientPlot`
+
+        Supply the numerator and denominator by names
+        """
+
+        # Parse the optional arguments
+        ( requestOptions, plotOptions ) = ParseOptionalArgs( kwargs )
+
+        # Create a default name if necessary
+        if outputName == "":
+            modHistName = histName.replace('/','_')
+            outputName = "%s_%s.%s" % (sampleName, modHistName, kind)
+
+        request = {}
+        request["DrawErrors"] = True # Set the default
+        request.update( self.GetConfigurationState() )
+        request.update( requestOptions )
+        #request["Lumi"] = self.__luminosity
+
+        if "Maximum" not in request:
+            request["Maximum"] = 1.2 # Efficiency Maximum
+        request["Plots"] = []
+
+        #foundSample = False
+
+        plotTemplate = self.GetPlot( sampleName ) #None
+        plotTemplate["FillColor"] = 0 # No Fill
+
+        # We make two plots,
+        # one for numerator and one for denominator
+        plotNumerator = copy.deepcopy(plotTemplate)
+        plotNumerator.update( plotOptions )
+        plotNumerator["Hist"]  = numerator
+        plotNumerator["QuotientType"] = "Numerator"
+        request["Plots"].append( plotNumerator )
+
+        plotDenominator = copy.deepcopy(plotTemplate)
+        plotDenominator.update( plotOptions )
+        plotDenominator["Hist"]  = denominator
+        plotNumerator["QuotientType"] = "Denominator"
+        request["Plots"].append( plotDenominator )
+
+        # Now, the request will create two plots
+
+        request["Type"] = "EfficiencyPlot"
+        request["OutputName"] = outputName
+
+        if cache:
+            self.requestCache.append( request )
+        else:
+            MakeQuotientPlot( outputName, request );
+
+        return
+
 
     def PlotHistogram( self, hname, filename ):
+        """ Present for backward compatability
 
-        # Create a canvas:
-        canvas = ROOT.TCanvas( hname + "_canvas", "Canvas for plot making", 800, 600 )
-        canvas.cd()
+        """
+        self.MakeMCDataPlot( histName=hname, outputName=filename )
 
-        dhist    = self.GetDataHist( hname )
-        mchists  = self.GetMCHists( hname )
-        bsmhists = self.GetBSMHists( hname )
 
-        (stack, legend) = self.__DrawHistogram( hname, dhist, mchists, bsmhists )
+    def MakeMCDataStack(self, hist, outputName="", sampleList=[], cache=False, **kwargs):
+        """ Make a plot of data and a stack of MC 
 
-        if self.__useLogScale:
-            canvas.SetLogy()
+        This function calls :py:meth:`helpers.MakeMCDataStack.MakeMCDataStack`
 
-        canvas.SaveAs( filename )
+        Deligate the work to the helper function 
+        of the same name.
+        Here, simply build up the JSON request
+        from the current state of the class
+        and pass it to the function.
+        """
+        # Build up the set of samples
+        # and add configuration
+
+        # IF necessary, make a default name
+        if outputName == "":
+            outputName = "%s.pdf" % hist
+
+        # Parse the optional arguments
+        ( requestOptions, plotOptions ) = ParseOptionalArgs( kwargs )
+
+        # Use black lines between stacks
+        if "LineColor" not in plotOptions:
+            plotOptions["LineColor"] = ROOT.kBlack
+
+        request = {}
+        request.update( self.GetConfigurationState() )
+        request.update( requestOptions )
+        #request["Lumi"] = self.__luminosity
+        request["Plots"] = []
+        
+        # Configure all plots to be added
+        # Do this by collecting the MC and
+        # datasamples and setting their
+        # histograms to the request HIST
+
+        # Always add all data
+        for name, sample in self.__datasamples.iteritems():
+            plot = copy.deepcopy(sample)
+            #plot["Hist"] = hist
+            request["Plots"].append( plot )
+
+        # Add the MC and BSM samples to the request
+        # based on the sampleList (if there is one)
+        mc_bsm_samples = self.GetListOfPlots( [self.__mcsamples, self.__bsmsamples], sampleList ) 
+        request["Plots"].extend( mc_bsm_samples )
+
+        # Configure all plots
+        for plot in request["Plots"]:
+            plot["Hist"] = hist
+            plot.update( plotOptions )
+
+        """
+        for name, sample in self.__mcsamples.iteritems():
+            if sampleList != []:
+                if name not in sampleList:
+                    continue
+                pass
+            plot = copy.deepcopy(sample)
+            plot.update( plotOptions )
+            plot["Hist"] = hist
+            request["Plots"].append( plot )
+
+        for name, sample in self.__bsmsamples.iteritems():
+            if sampleList != []:
+                if name not in sampleList:
+                    continue
+                pass
+            plot = copy.deepcopy(sample)
+            plot.update( plotOptions )
+            plot["Hist"] = hist
+            request["Plots"].append( plot )
+        """
+        # Set the request type
+        request["Type"] = "MCDataStack"
+        request["OutputName"] = outputName
+
+        # If cache, wait for later
+        # Else, make the histogram now
+
+        if cache:
+            self.requestCache.append( request )
+        else:
+            #MakeMCDataStack.MakeMCDataStack( outputName, request );
+            MakeMCDataStack( outputName, request );
+
+        ROOT.gROOT.DeleteAll()
+
         return
 
-    def PlotMultipleHistograms( self, hnameList, filename ):
 
-        if len(hnameList) == 0:
-            self.logger.error( "No Histograms supplied" )
-            return
+    def MakeStack(self, hist, outputName="", sampleList=[], cache=False, **kwargs):
+        """ Make a plot of data and a stack of MC 
 
-        # Create a canvas:
-        canvas = ROOT.TCanvas(  "canvas", "Canvas for plot making", 800, 600 )
-        canvas.cd()
+        Deligate the work to the helper function 
+        of the same name.
+        Here, simply build up the JSON request
+        from the current state of the class
+        and pass it to the function.
+        """
+        # Build up the set of samples
+        # and add configuration
 
-        canvas
-        canvas.Print(filename + "[");
+        # Parse the optional arguments
+        ( requestOptions, plotOptions ) = ParseOptionalArgs( kwargs )
 
-        for hname in hnameList:
+        # IF necessary, make a default name
+        if outputName == "":
+            outputName = "%s.pdf" % hist
 
-            dhist    = self.GetDataHist( hname )
-            mchists  = self.GetMCHists( hname )
-            bsmhists = self.GetBSMHists( hname )
+        request = {}
+        request.update( self.GetConfigurationState() )
+        request.update( requestOptions )
+        #request["Lumi"] = self.__luminosity
+        request["Plots"] = []
 
-            (stack, legend) = self.__DrawHistogram( hname, dhist, mchists, bsmhists )
+        # If the input sampleList is empty,
+        # we interpret that to mean that we use
+        # all available samples
 
-            canvas.Print( filename, "Title:" + hname )
-            pass
+        # Configure all plots to be added
+        # Do this by collecting the MC and
+        # datasamples and setting their
+        # histograms to the request HIST
+        mc_bsm_samples = self.GetListOfPlots( [self.__mcsamples, self.__bsmsamples], sampleList) 
+        for plot in mc_bsm_samples:
+            plot["Hist"] = hist
+            plot.extend( plotOptions )
+        request["Plots"].extend( mc_bsm_samples )
 
+        """
+        allSamples = itertools.chain(self.__datasamples.iteritems(), self.__mcsamples.iteritems(), self.__bsmsamples.iteritems())
+        for name, sample in allSamples:
+            if sampleList != []:
+                if name not in sampleList:
+                    continue
+                pass
+            plot = copy.deepcopy(sample)
+            plot.update( plotOptions )
+            plot["Hist"] = hist
+            request["Plots"].append( plot )
+        """
+        # Set the request type
+        request["Type"] = "Stack"
+        request["OutputName"] = outputName
 
-        if self.__useLogScale:
-            canvas.SetLogy()
-
-        canvas.Print(filename + "]");
+        # If cache, wait for later
+        # Else, make the histogram now
+        if cache:
+            self.requestCache.append( request )
+        else:
+            MakeStack( outputName, request );
 
         return
+
+
+    def MakeMCStack(self, hist, outputName="", sampleList=[], cache=False, **kwargs):
+        """ Make a plot of data and a stack of MC 
+
+        Deligate the work to the helper function 
+        of the same name.
+        Here, simply build up the JSON request
+        from the current state of the class
+        and pass it to the function.
+        """
+        # Build up the set of samples
+        # and add configuration
+
+        # Parse the optional arguments
+        ( requestOptions, plotOptions ) = ParseOptionalArgs( kwargs )
+
+        # If necessary, make a default name
+        if outputName == "":
+            outputName = "%s.pdf" % hist
+
+        request = {}
+        request.update( self.GetConfigurationState() )
+        request.update( requestOptions )
+        #request["Lumi"] = self.__luminosity
+        request["Plots"] = []
+
+        # Configure all plots to be added
+        # Do this by collecting the MC and
+        # datasamples and setting their
+        # histograms to the request HIST
+        mc_bsm_samples = self.GetListOfPlots( [self.__mcsamples, self.__bsmsamples], sampleList) 
+        for plot in mc_bsm_samples:
+            plot["Hist"] = hist
+            # Use black lines between stacks
+            if plot['Type'] == 'MC':
+                plotOptions["LineColor"] = ROOT.kBlack
+            plot.update( plotOptions )
+        request["Plots"] = mc_bsm_samples 
         
 
-    def PlotProbabilityHistogram( self, hname, filename ):
+        """
+        allMCSamples = itertools.chain(self.__mcsamples.iteritems(), self.__bsmsamples.iteritems())
+        for name, sample in allMCSamples:
+            if sampleList != []:
+                if name not in sampleList:
+                    continue
+                pass
+            plot = copy.deepcopy(sample)
+            plot.update( plotOptions )
+            plot["Hist"] = hist
+            request["Plots"].append( plot )
+        """
+        # Set the request type
+        request["Type"] = "MCStack"
+        request["OutputName"] = outputName
 
-        # Create a canvas:
-        canvas = ROOT.TCanvas( hname + "_canvas", "", 800, 1000 )
-        canvas.Divide(1,2, 0.01, 0.01)
+        # If cache, wait for later
+        # Else, make the histogram now
 
-        if self.__useLogScale:
-            canvas.cd(1).SetLogy()
-        
-        dhist    = self.GetDataHist( hname )
-        mchists  = self.GetMCHists( hname )
-        bsmhists = self.GetBSMHists( hname )
+        if cache:
+            self.requestCache.append( request )
+        else:
+            MakeMCStack( outputName, request );
 
-        (stack, legend) = self.__DrawHistogram( hname, dhist, mchists, bsmhists )
-
-        if self.__useLogScale:
-            canvas.cd(2).SetLogy()
-
-        (legend ) = self.__DrawProbabilityPlot( hname, bsmhists )
-
-        canvas.SaveAs( filename )
         return
 
 
-######################
-# internal functions #
-######################
+    def MakeMultipleSamplePlot( self, histName, sampleList, outputName, cache=False, **kwargs ):
+        """ Make a plot all histograms in the list simultaneously
+
+        Plot a particular histogram for all samples
+        in the sample list simultaneously.
+        The given sample and all histograms must exist.
+        """
+
+        # Parse the optional arguments
+        ( requestOptions, plotOptions ) = ParseOptionalArgs( kwargs )
+
+        # Create a default name if necessary
+        request = {}
+        request.update( self.GetConfigurationState() )
+        request.update( requestOptions )
+        #request["Lumi"] = self.__luminosity
+        request["Plots"] = []
+
+        all_plots = self.GetListOfPlots( [self.__datasamples, self.__mcsamples, self.__bsmsamples], 
+                                         sampleList) 
+        for plot in all_plots:
+            plot.update( plotOptions )
+            plot["Hist"] = histName
+            plot["Signal"] = False # Ignore Signal
+            plot["FillColor"] = 0
+
+        request["Plots"] = all_plots
+        request["Type"] = "MultipleSamplePlot"
+        request["OutputName"] = outputName
+
+        if cache:
+            self.requestCache.append( request )
+        else:
+            MakeMultiplePlot( outputName, request );
+
+        return
+
+
+    def MakeMultipleVariablePlot( self, histList, sampleName, outputName="", nameList=[], colorList=[], cache=False, **kwargs ):
+        """ Make a plot all histograms in the list simultaneously
+
+        For a particular sample given by the sampleName,
+        collect every hist in the histList,
+        and plot them simultaneously on the same plot.
+        The given sample and all histograms must exist.
+        """
+
+        # Parse the optional arguments
+        ( requestOptions, plotOptions ) = ParseOptionalArgs( kwargs )
+
+        # Do some sanity checks
+        if nameList != [] and len(nameList) != len(histList):
+            print "Error: length of histList and nameList don't match"
+            raise Exception("nameList histList conflift")
+
+        if colorList != [] and len(colorList) != len(histList):
+            print "Error: length of histList and colorList don't match"
+            raise Exception("colorList histList conflift")
+
+        # Create a default name if necessary
+        if outputName == "":
+            outputName = sampleName
+            for name in histList:
+                outputName +=  "_%s" % name.replace('/','_') 
+            outputName += ".pdf"
+
+        request = {}
+        request.update( self.GetConfigurationState() )
+        request.update( requestOptions )
+        #request["Lumi"] = self.__luminosity
+        request["Plots"] = []
+
+        '''
+        plotTemplate = self.GetSample( sampleName ) #None
+        UseNameList = False
+        if len( nameList ) == len( histList ):
+            UseNameList = True
+
+        UseColorList = False
+        if len( colorList ) == len( histList ):
+            UseColorList = True
+        '''
+
+        # Loop over all requested histograms,
+        # configure the plots, and add them to
+        # the plot ist
+        for itr, hist in enumerate(histList):
+            plot = self.GetPlot( sampleName ) #copy.deepcopy( plotTemplate )
+            plot.update( plotOptions )
+            if nameList != []: 
+                plot["Name"] = nameList[itr]
+                plot["Title"] = nameList[itr]
+            else: plot["Name"]  = hist
+            #if UseNameList:
+            #    plot["Name"] = nameList[i]
+            if colorList != []: plot["Color"] = colorList[itr]
+            else: plot["Color"] = self.__defaultcolors[itr] 
+            plot["Hist"]  = hist
+            plot["Signal"] = False # Ignore Signal
+            plot["FillColor"] = 0
+            request["Plots"].append( plot )
+
+        request["Type"] = "MultipleVariablePlot"
+        request["OutputName"] = outputName
+
+        if cache:
+            self.requestCache.append( request )
+        else:
+            MakeMultiplePlot( outputName, request );
+
+        return
+
+
+    def GetTH1( self, hist, sampleName, style=True, **kwargs ):
+        """ Return the specified TH1 object
+
+        Using the native HistCollector, get a histogram
+        from a sample (summing if necessary) and return
+        """
+        ( requestOptions, plotOptions ) = ParseOptionalArgs( kwargs )
         
+        request={}
+        request.update( self.GetConfigurationState() )
+        request.update( requestOptions )
+
+        plot = self.GetPlot( sampleName ) #copy.deepcopy( self.GetPlot( sampleName ) )
+        plot.update( plotOptions )
+        plot["Hist"] = hist
+        th1 = GetAndStyleHist( plot, self.histCache )
+        ScaleHist( th1, plot, request )
+        return th1
 
 
-    def __DrawHistogram( self, hname, dhist, mchists, bsmhists ):
-        # Retrieve the data and MC histograms:
+    def MakeMultipleTH1Plot( self, histList, outputName, nameList=[], cache=False, **kwargs ):
+        """ Make a plot all histograms in the list simultaneously
 
-        # Create the histogram representing the sum of all MC samples
-        addedSamples = None
-        for mctype, h1d in mchists.iteritems():
-            # make projections and add them
-            #h1d = mchists[ mctype ]
-            
+        For a particular sample given by the sampleName,
+        collect every hist in the histList,
+        and plot them simultaneously on the same plot.
+        The given sample and all histograms must exist.
+        """
 
-            if addedSamples:
-                addedSamples.Add ( h1d )
-            else:
-                addedSamples = h1d.Clone()
-            pass
+        # Parse the optional arguments
+        ( requestOptions, plotOptions ) = ParseOptionalArgs( kwargs )
 
-        maximum = max( [ addedSamples.GetMaximum(), dhist.GetMaximum() ] + \
-                       [ bsmhists[ bsmtype ].GetMaximum() for bsmtype in bsmhists.keys() ] )
-        maximum *= 1.4
+        # Some sanity checks
+        if nameList != [] and len(nameList) != len(histList):
+            print "Error: length of histList and nameList don't match"
+            raise Exception("nameList histList conflift")
 
-        # Create a canvas:
-        #canvas = ROOT.TCanvas( hname + "_canvas", "Canvas for plot making",
-        #                       800, 600 )
-        #canvas.cd()
-        # Plot the data first:
-        dhist.SetMaximum( maximum )
-        dhist.Draw()
+        # Create a default name if necessary
+        if outputName == "":
+            outputName = sampleName
+            for name in histList:
+                outputName +=  "_%s" % name.replace('/','_') 
+            outputName += ".pdf"
 
-        # Create a stack of the MC histograms:
-        stack = ROOT.THStack( hname + "_mcstack", "Stacked MC histograms" )
-        # Every element should be a list of the form [histo, "name", "style"]
+        request = {}
+        request.update( self.GetConfigurationState() )
+        request.update( requestOptions )
+        #request["Lumi"] = self.__luminosity
+        request["Plots"] = []
 
-        # Now draw the MC histograms one by one:
-        legendEntries = []
-        usedcolors = []
-        #color = 2
-        for mctype, mchist in mchists.iteritems():
-            #mchist = mchists[ mctype ]
-            if mctype in self.__colors:
-                color = self.__colors[ mctype ]
-            else:
-                color = self.GetDefaultColor( usedcolors )
-            mchist.SetFillColor(color)
-            mchist.SetLineColor(color)
-            stack.Add( mchist )
-            stack.Draw( "HIST SAME" )
-            legendEntries.append( [mchist, mctype, "f"] )
-            self.logger.debug( "Adding mc histogram to stack: %s (color = %d )" % (mctype, color) )
-            pass
+        #foundSample = False
 
-        # Draw the data points again:
-        dhist.Draw( "SAME" )
+        #UseNameList = False
+        #if len( nameList ) == len( histList ):
+        #    UseNameList = True
 
-        # Create a legend for the plot:
-        legend = ROOT.TLegend( self.__legendLowX, self.__legendLowY,
-                               self.__legendHighX, self.__legendHighY )
-        legend.AppendPad()
-        legend.SetFillStyle( 0 )
+        for idx, hist in enumerate(histList):
+            plot = {}
+            plot.update( plotOptions )
+            if nameList != []: 
+                plot["Name"] = nameList[idx]
+                plot["Title"] = nameList[idx]
+            else: plot["Name"]  = hist.GetName()
+            plot["Hist"]  = hist
+            plot["Signal"] = False
+            plot["Color"] = self.__defaultcolors[ idx ]
+            plot["FillColor"] = 0
+            request["Plots"].append( plot )
 
-        legend.AddEntry( dhist, "data", "lpe" )
-        # show the stacked histograms in the same order
-        legendEntries.reverse()
-        for e in legendEntries: legend.AddEntry( e[0], e[1], e[2] )
+        request["Type"] = "MultipleTH1Plot"
+        request["OutputName"] = outputName
 
-        # Draw the BSM histograms one-by-one and draw the legend:
-        for bsmtype, bsmhist in bsmhists.iteritems():
-            #bsmhist = bsmhists[ bsmtype ]
-            if bsmtype in self.__colors:
-                color = self.__colors[ bsmtype ]
-            else:
-                color = self.GetDefaultColor( usedcolors )
-            bsmhist.SetLineColor( color )
-            if bsmtype in self.__linestyles:
-                lstyle = self.__linestyles[ bsmtype ]
-                bsmhist.SetLineStyle( lstyle )
-            self.logger.debug( "Adding bsm histogram to stack: %s (color = %d, lstyle = %d )" % (bsmtype, color, lstyle) )
-            bsmhist.Draw( "HIST SAME" )
-            legend.AddEntry( bsmhist, bsmtype, "l" )
-            pass
-        legend.Draw()
+        if cache:
+            self.requestCache.append( request )
+        else:
+            MakeMultipleTH1Plot( outputName, request );
 
-        # Add the ATLAS notations:
-        if self.__AtlasLabel:
-            import AtlasUtil
-            AtlasUtil.AtlasLabel( 0.20, 0.85 )
-            AtlasUtil.DrawLuminosity( 0.20, 0.76, self.__luminosity )
-
-        # Now create the plot:
-        #canvas.SaveAs( filename )
-        return (stack, legend)
+        return
 
 
     
-    def __DrawProbabilityPlot( self, hTitle, bsmhists ):
+    def MakeTable( self, histName, sampleName, outputName="", cache=False, **kwargs ):
+        """ Make a table from a given histogram for a given sample
 
-        legend2 = ROOT.TLegend( self.__legendLowX, self.__legendLowY,
-                                self.__legendHighX, self.__legendHighY )
-        legend2.AppendPad()
-        legend2.SetFillStyle( 0 )
+        For now we implement it here...
+        """
+
+        logging.debug( "MakeTable" )
+
+        # Parse the optional arguments
+        ( requestOptions, plotOptions ) = ParseOptionalArgs( kwargs )
+
+        request = {}
+        request.update( self.GetConfigurationState() )
+        #request["Lumi"] = self.__luminosity
+        request["Plots"] = []
+
+        # Get the info for this sample
+        plotTemplate = self.GetPlot( sampleName ) #None
+        plot = copy.deepcopy( plotTemplate )
+        plot.update( plotOptions )
+        plot["Hist"]  = histName
+        plot["FileList"] = [  ]
+        request["Plots"].append( plot )
+
+        # Get a list of all plots
+        # (We should have only one)
+        histList = GetNameHistList( request ) # hist = GetAndStyleHist( plot )
         
-        maxim = -1
-            # Draw the BSM histograms one-by-one:
-        for bsmtype, h1d in bsmhists.iteritems():
-            h1d = bsmhists[ bsmtype ]
-            if h1d.GetEntries() < 1:
-                continue
-            if bsmtype in self.__colors:
-                color = self.__colors[ bsmtype ]
-            else:
-                color = self.GetDefaultColor( usedcolors )
-            h1d.SetLineColor( color )
-            if bsmtype in self.__linestyles:
-                lstyle = self.__linestyles[ bsmtype ]
-                h1d.SetLineStyle( lstyle )
-            if hTitle!="":
-                h1d.SetTitle(hTitle)
-            h1d.GetYaxis().SetTitle("probability")
-            # normalization
-            area = h1d.Integral()
-            if area > 0:
-                h1d.Scale(1.0/area)
-            else:
-                continue
-            hmax = h1d.GetMaximum()
-            if hmax > maxim:
-                maxim = hmax
-            legend2.AddEntry( h1d, bsmtype, "l" )
-            #  + " (x" + str( self.__bsmsamples[ bsmtype ][ 0 ][ 1 ] ) + ")"
-                #lstyle += 1
-            pass
+        (name, hist) = histList[0]
 
-        first = True
-        for bsmtype, h1d in bsmhists.iteritems():
-            h1d = bsmhists[ bsmtype ]
-            if h1d.GetEntries() < 1:
-                continue
-            h1d.SetMaximum( 1.5 * maxim )
-            if first:
-                h1d.Draw( "HIST" )
-                first = False
-            else:
-                h1d.Draw( "HIST SAME" )
-            pass
+        # Now, make the table
+        output = open( outputName, "w" )
 
-        legend2.Draw()
-        return legend2
-
-
-###############################
-
-
-###############################
-# plot slices of 2D histogram #
-###############################
-
-    def DrawHoriSliceFrom2D( self, hname, filename, firstBin=0, lastBin=-1,
-                             hTitle="", plotSigMC=True, overlaySigMC=False ):
-        # Retrieve the data and MC histograms:
-        dhist = self.GetDataHist( hname )
-        mchists = self.GetMCHists( hname )
-        bsmhists = self.GetBSMHists( hname )
-
-        ROOT.gStyle.SetTitleFillColor(0)
-
-        # Create a canvas:
-        if plotSigMC and (not overlaySigMC):
-            cv = ROOT.TCanvas( hname + "_canvas", "", 800, 1000 )
-            cv.Divide(1,2,0.01,0.01)
-        else:
-            cv = ROOT.TCanvas( hname + "_canvas", "", 800, 600 )
-
-        # Create the histogram representing the sum of all MC samples
-        addedSamples = None
-        for mctype in mchists.keys():
-            # make projections and add them
-            h2d = mchists[ mctype ]
-            title = h2d.GetTitle() + ": "
-            yaxis = h2d.GetYaxis()
-            label = yaxis.GetBinLabel(firstBin)
-            h1d = h2d.ProjectionX(title+label+mctype, firstBin, lastBin)
-            if addedSamples:
-                addedSamples.Add ( h1d )
-            else:
-                addedSamples = h1d.Clone()
-            pass
-
-        cv.cd(1).SetLogy()
+        Nbins = hist.GetNbinsX()
         
-        # Plot the data first:
-        title = dhist.GetTitle() + ": "
-        yaxis = dhist.GetYaxis()
-        label = yaxis.GetBinLabel(firstBin)
-        hData = dhist.ProjectionX(title+label, firstBin, lastBin)
-        if hTitle==0:
-            hData.SetTitle(title+label)
-        else:
-            hData.SetTitle(hTitle)
-        hData.GetYaxis().SetTitle( dhist.GetZaxis().GetTitle() )
-        minimum = min( [ 0.02, addedSamples.GetMinimum(), hData.GetMinimum() ] )
-        minimum *= 0.5
-        minimum += 2e-2
-        maximum = max( [ 100, addedSamples.GetMaximum(), hData.GetMaximum() ] )
-        maximum *= 2.0        
-        hData.SetMinimum( minimum )
-        hData.SetMaximum( maximum )
-        if hTitle!="":
-            hData.SetTitle(hTitle)
-        hData.Draw()
-
-        # Create a legend for the plot:
-#         legend1 = ROOT.TLegend( self.__legendLowX, self.__legendLowY,
-#                                self.__legendHighX, self.__legendHighY )
-        legend1 = ROOT.TLegend( 0.72, 0.55, 0.97, 0.998 )
-        legend1.AppendPad()
-#        legend1.SetFillStyle( 0 )
-        legend1.SetFillColor( 0 )
-        legend1.AddEntry( hData, "data", "lpe" )
-
-
-        # Create a stack of the MC histograms:
-        stack = ROOT.THStack( hname + "_mcstack", "Stacked MC histograms" )
-        # Now draw the MC histograms one by one:
-        lstyle = 1
-        #color = 2
-        usedcolors = []
-        # Every element should be a list of the form [histo, "name", "style"]
-        legendEntries = []
-        for mctype in mchists.keys():
-            # draw projections
-            h2d = mchists[ mctype ]
-            title = h2d.GetTitle() + ": "
-            yaxis = h2d.GetYaxis()
-            label = yaxis.GetBinLabel(firstBin)
-            hist = h2d.ProjectionX(title+label+mctype, firstBin, lastBin)
-            hist.SetFillStyle( 1001 )
-            if mctype in self.__colors:
-                color = self.__colors[ mctype ]
-            else:
-                color = self.GetDefaultColor( usedcolors )
-            hist.SetFillColor( color )
-            hist.SetLineColor( color )
-            if mctype in self.__linestyles:
-                lstyle = self.__linestyles[mctype]
-                hist.SetLineStyle( lstyle )
-            stack.Add( hist )
-            legendEntries.append( [hist, mctype, "f"] )
-            #lstyle += 1
-            pass
-
-        legendEntries.reverse()
-        for e in legendEntries: legend1.AddEntry( e[0], e[1], e[2] )
-
-        # Draw the data points again:
-        stack.Draw( "HIST SAME" )
-        hData.Draw( "SAME" )
-
-        legend1.Draw();
+        for bin in range(Nbins):
+            binLabel = hist.GetXaxis().GetBinLabel( bin+1 )
+            binValue = hist.GetBinContent( bin+1 )
+            print >>output, "%s & %#.3g \\\\" % (binLabel, binValue)
         
-        # Add the ATLAS notations:
-        import AtlasUtil
-        AtlasUtil.AtlasLabel( 0.20, 0.85 )
-        AtlasUtil.DrawLuminosity( 0.20, 0.76, self.__luminosity )
+        print "Made Table: " + outputName
+        output.close()
 
-        if not plotSigMC and not overlaySigMC:
-            cv.SaveAs( filename )
-            return addedSamples
-        elif plotSigMC:
-            cv.cd(2).SetLogy()
+        return
 
 
-        if not overlaySigMC:
-            legend2 = ROOT.TLegend( 0.72, 0.65, 0.97, 0.998 )
-            legend2.AppendPad()
-            legend2.SetFillColor( 0 )
-#             legend2.SetFillStyle( 0 )
+    def MakeSingleCutSelectionTable( self, cutName, channelHistList, outputName="", sampleList=[], channelNameList=[], 
+                                     DoTotalMC=True, **kwargs ):
+        """ Make a selection table for a particular cut 
+        
+        If you save a histogram where each bin represents a cut and is labeled, 
+        the PlotMaker can make tables for you.
+
+        Table Looks Like This:
+
+        +------------+------------+-----------+-----------+--------------------------+
+        |            | Channel 1  | Channel2  | Channel3  | Total (Sum of Channels ) |
+        +============+============+===========+===========+======+===================+
+        | Sample A   |            |           |           |                          |
+        +------------+------------+-----------+-----------+--------------------------+
+        | Sample B   |            |           |           |                          |
+        +------------+------------+-----------+-----------+--------------------------+
+        | Total      |            |           |           |                          |
+        +------------+------------+-----------+-----------+--------------------------+
+        | Data       |            |           |           |                          |
+        +------------+------------+-----------+-----------+--------------------------+
+        | BSM1       |            |           |           |                          |
+        +------------+------------+-----------+-----------+--------------------------+
+
+        Requred is the list of histograms representing the cut flows for each channel.
+        Optional is a name for each channel (this will appear in the table).
+        One can set the samples used in this table.
+        If DoTotalMC is true, a row showing the sum of MC will be included.
+
+        """
+
+        logging.debug( "MakeTable" )
+
+        if( channelNameList == [] ):
+            channelNameList=channelHistList
+        
+        if len(channelNameList) != len(channelHistList):
+            print "Error: Channel Name list doesn't match Channel Hist List"
+            raise Exception("Channel Name Hist Mismatch")
+            return
+
+        # Parse the optional arguments
+        ( requestOptions, plotOptions ) = ParseOptionalArgs( kwargs )
+
+        requestBase = {}
+        requestBase.update( self.GetConfigurationState() )
+        #requestBase["Lumi"] = self.__luminosity
+        requestBase["Plots"] = []
+        
+        # Get the list of MC and Data Samples
+        # ChannelHistogramList = {}
+
+        # Dictionaries of [Sample][Channel]
+        # for data, mc, and bsm
+        # ie dataSampleChannelList[ sampleA ] = { Channel1: val1, Channel2: val2, etc }
+        # and hence dataSampleChannelList[ sampleA ][ Channel1 ] = val1
+        dataSampleChannelDict = OrderedDict()
+        mcSampleChannelDict   = OrderedDict()
+        bsmSampleChannelDict  = OrderedDict()
+
+        from helpers.tools import GetBinValue 
+
+        # Gather the necessary information
+        for channel in channelHistList:
+
+            # Get the histograms for this channel
+            request = copy.deepcopy( requestBase )
+
+            allSamples = itertools.chain(self.__datasamples.iteritems(), self.__mcsamples.iteritems(), self.__bsmsamples.iteritems())
+            for name, sample in allSamples:
+                if sampleList != []:
+                    if name not in sampleList:
+                        continue
+                    pass
+                plot = copy.deepcopy(sample)
+                plot.update( plotOptions )
+                plot["Hist"] = channel
+                request["Plots"].append( plot )
+
+            # Now, get the histograms for this channel
+            
+            # Get the data hist
+            dataHistList = GetDataNameHistList( request, self.histCache )
+        
+            # Make a list of the MC (NOT BSM)
+            mcHistList   = GetMCNameHistList( request,   self.histCache )
+
+            # Make a list of the BSM Hists
+            bsmHistList  = GetBSMNameHistList( request,  self.histCache )
+
+            # Check that all histograms match
+            CompareHistograms( [ pair[1] for pair in (dataHistList + mcHistList + bsmHistList) ] ) 
+
+            # Get the value for each histogram
+
+            # Pack up the data
+            for (sampleName, hist) in dataHistList:
+                value = GetBinValue( hist, cutName )
+                if sampleName not in dataSampleChannelDict:
+                    dataSampleChannelDict[sampleName] = OrderedDict()
+                dataSampleChannelDict[sampleName][channel] = value
+
+            mcTotalValue = 0.0
+            for (sampleName, hist) in mcHistList:
+                value = GetBinValue( hist, cutName )
+                if sampleName not in mcSampleChannelDict:
+                    mcSampleChannelDict[sampleName] = OrderedDict()
+                mcSampleChannelDict[sampleName][channel] = value
+                mcTotalValue += value
+
+            # Add the Sum of MC
+            if DoTotalMC and len(mcSampleChannelDict)!=0:
+                if "Total MC" not in mcSampleChannelDict:
+                    mcSampleChannelDict["Total MC"] = OrderedDict()
+                mcSampleChannelDict["Total MC"][channel] = mcTotalValue
+                pass
+
+            for (sampleName, hist) in bsmHistList:
+                value = GetBinValue( hist, cutName )
+                if sampleName not in bsmSampleChannelDict:
+                    bsmSampleChannelDict[sampleName] = OrderedDict()
+                bsmSampleChannelDict[sampleName][channel] = value
+
+        #
+        # Now we have the informaiton, make the tabke
+        #
+
+        table = []
+
+        # Make the Top Row
+        row = []
+        row.append("")
+        for channel in channelNameList:
+            row.append(" %s " % MakeLatexString(channel))
+        table.append(row)
+        table.append("toprule")
+
+        # Add the MC Rows
+        if(len(mcSampleChannelDict)): 
+            table.append("toprule")
+        for (sampleName, channelValueDict) in mcSampleChannelDict.iteritems():
+            if sampleName == "Total MC":
+                table.append("toprule")
+            mc_row = []
+            mc_row.append(" %s " % MakeLatexString(sampleName))
+            for channel in channelHistList:
+                mc_row.append("%#.3g" % channelValueDict[channel])
+            table.append(mc_row)
+
+        # Add the data row(s)
+        if(len(dataSampleChannelDict)): 
+            table.append("toprule")
+        for (sampleName, channelValueDict) in dataSampleChannelDict.iteritems():
+            data_row = []
+            data_row.append(" %s " % MakeLatexString(sampleName))
+            for channel in channelHistList:
+                data_row.append(" %d " % channelValueDict[channel])
+            table.append(data_row)
+
+        # Add the BSM rows
+        if(len(bsmSampleChannelDict)): 
+            table.append("toprule")
+        for (sampleName, channelValueDict) in bsmSampleChannelDict.iteritems():
+            bsm_row = []
+            bsm_row.append(" %s " % MakeLatexString(sampleName))
+            for channel in channelHistList:
+                bsm_row.append("%#.3g" % channelValueDict[channel])
+            table.append(bsm_row)
+
+        latex_table = MakeLatexTable(table)
+        output = open( outputName, "w" )
+        output.write(latex_table)
+        output.close()
+        print "Wrote Table: ", outputName
+        return
+   
+    '''
+
+
+        ###
+        ###
+        ###
+
+        output = open( outputName, "w" )
+
+        # Make the Top Row
+        print >>output, "\\begin{tabular}{r", 
+        for num in range(len(channelHistList)):
+            print >>output, "|c",
+            #print >>output, "|p{.06\\linewidth}",
+        print >>output, "}"
+        print >>output, "\\toprule"
+        print >>output, " ", # Blank Insert
+        for channel in channelNameList:
+            print >>output, ("& %s " % MakeLatexString(channel)),
+        print >>output, "\\\\" # End Line
+
+        # Make the MC Rows
+        if(len(mcSampleChannelDict)): print >>output, "\\toprule"
+        for (sampleName, channelValueDict) in mcSampleChannelDict.iteritems():
+            if sampleName == "Total MC":
+                print >>output, "\\toprule"
+            print >>output, (" %s " % MakeLatexString(sampleName)),
+            for channel in channelHistList:
+                print >>output, " & %#.3g " % channelValueDict[ channel ],
+            print >>output, " \\\\ "
+
+        # Make the Data
+        if(len(dataSampleChannelDict)): print >>output, "\\toprule"
+        for (sampleName, channelValueDict) in dataSampleChannelDict.iteritems():
+            print >>output, (" %s " % MakeLatexString(sampleName)),
+            for channel in channelHistList:
+                print >>output, " & %d " % channelValueDict[ channel ],
+            print >>output, " \\\\ "
+
+        # Make the BSM Rows
+        if(len(bsmSampleChannelDict)): print >>output, "\\toprule"
+        for (sampleName, channelValueDict) in bsmSampleChannelDict.iteritems():
+            print >>output, (" %s " % MakeLatexString(sampleName)),
+            for channel in channelHistList:
+                print >>output, " & %#.3g " % channelValueDict[ channel ],
+            print >>output, " \\\\ "
+
+        print >>output, "\\bottomrule"
+        print >>output, "\\end{tabular}"
+        
+        print "Made Table: " + outputName
+        output.close()
+            
+        pass
+'''
+
+    def MakeSingleChannelSelectionTable( self, channelHistName, sampleList=[], cutList=[], outputName="", 
+                                         DoTotalMC=True, DoTotalEfficiency=False, DoPreviousEfficiency=False, **kwargs ):
+        """ Make a selection table for a particular cut 
+        
+        Table Looks Like This:
+
+        +--------+-----------+-----------+-----------+
+        |        | Sample A  | Sample B  | Sample C  |
+        +========+===========+===========+===========+
+        | Cut 0  |           |           |           |
+        +--------+-----------++----------+-----------+
+        | Cut 1  |           |           |           |
+        +--------+-----------+-----------+-----------+
+        | Cut 2  |           |           |           |
+        +--------+-----------+-----------+-----------+
+        | Cut 3  |           |           |           |
+        +--------+-----------+-----------+-----------+
+
+        Need only one histogram per sample: The channel's cut flow
+        """
+
+        logging.debug( "MakeTable" )
+
+        if DoTotalEfficiency or DoPreviousEfficiency:
+            DoEfficiency=True
+        else:
+            DoEfficiency=False
+
+        # Parse the optional arguments
+        ( requestOptions, plotOptions ) = ParseOptionalArgs( kwargs )
+
+        request = {}
+        request.update( self.GetConfigurationState() )
+        #request["Lumi"] = self.__luminosity
+        request["Plots"] = []
+
+        # Get the list of MC and Data Samples
+
+        allSampleDict = OrderedDict()
+        allSampleDict.update( self.__datasamples )
+        allSampleDict.update( self.__mcsamples )
+        allSampleDict.update( self.__bsmsamples )
+
+        # Create a list of samples to use
+        # based on the arguments
+        samples_to_use = []
+        if sampleList != []:
+            for name in sampleList:
+                if name not in allSampleDict:
+                    print "Unrecognized sample: ", name
+                    return
+                samples_to_use.append( allSampleDict[name] )
             pass
         else:
-            legend2 = legend1
-        if overlaySigMC and not plotSigMC:
-            lstyle = 2
-        else:
-            lstyle = 1
-        #color = 1
-        first = 1
-        maxim = -1
-        minim = 10
-        hists1d = []
-        # Draw the BSM histograms one-by-one:
-        for bsmtype in bsmhists.keys():
-            h2d = bsmhists[ bsmtype ]
-            if h2d.GetEntries() < 1:
-                continue
-            title = h2d.GetTitle() + ": "
-            yaxis = h2d.GetYaxis()
-            label = yaxis.GetBinLabel(firstBin)
-            hists1d += [ h2d.ProjectionX(title+label+bsmtype, firstBin, lastBin) ]
-            if hists1d[-1].GetEntries() < 1:
-                continue
-            if color in self.__colors:
-                color = self.__colors[ mctype ]
-            else:
-                color = self.GetDefaultColor( usedcolors )
-            hists1d[-1].SetLineColor( color )
-            hists1d[-1].SetLineStyle( lstyle )
-            if not overlaySigMC:
-                # normalization
-                area = hists1d[-1].Integral()
-                if area > 0:
-                    hists1d[-1].Scale(1.0/area)
-                else:
+            samples_to_use = [sample for (name, sample) in allSampleDict.iteritems()]
+
+        # Create the plot requests for the samples
+        for sample in samples_to_use:
+            plot = copy.deepcopy(sample)
+            plot["Hist"] = channelHistName
+            plot.update( plotOptions )
+            request["Plots"].append( plot )
+
+        # Now, get the histograms for this channel
+        dataHistList = GetDataNameHistList( request, self.histCache )
+        mcHistList   = GetMCNameHistList( request,   self.histCache )
+        bsmHistList  = GetBSMNameHistList( request,  self.histCache )
+
+        allHists = dataHistList + mcHistList + bsmHistList 
+
+        # Check that all histograms match (are consistent)
+        CompareHistograms( [ pair[1] for pair in allHists ] ) 
+
+        # Get the number of samples
+        template = allHists[0][1]
+        NumCuts = template.GetNbinsX()
+        
+        # Now, we create a big ovject to hold the table
+        # Make the Titles
+        table = []
+
+        # Create the title row
+        row = []
+        row += " " # Upper Left is empty
+        for (name, hist) in mcHistList:
+            row.append(name)
+        if DoTotalMC and len(mcHistList)!=0:
+            row.append("Total")
+        for (name, hist) in bsmHistList:
+            row.append(name)
+        for (name, hist) in dataHistList:
+            row.append(name)
+        table.append(row)
+        table.append("toprule")
+        # Now, add the data rows
+                
+        if DoEfficiency:
+            initial_value_list = []
+            prev_value_list = []
+
+        first_cut = True
+        for cut in range(NumCuts):
+         
+            row = []
+   
+            cutIndex = cut + 1 # Silly ROOT Histogram conventions
+            cutName = template.GetXaxis().GetBinLabel( cutIndex )
+
+            # If we specify a list of cuts, 
+            # only include those ones
+            if cutList != []:
+                if cutName not in cutList:
                     continue
                 pass
-            hmax = hists1d[-1].GetMaximum()
-            if hmax > maxim:
-                maxim = hmax
-                hists1d[0].SetMaximum( 1.5 * maxim )
 
-            hmin = hists1d[-1].GetMinimum()
-            if hmin > minim:
-                minim = hmin
-                hists1d[0].SetMinimum( 0.5 * minim )
+            row.append(cutName)
 
-            legend2.AddEntry( hists1d[-1], bsmtype
-#                               + " (x" + str( self.__bsmsamples[ bsmtype ][ 0 ][ 1 ] ) + ")"
-                              , "l" )
+            mc_total = 0
 
-            if overlaySigMC and not plotSigMC:
-                lstyle += 1
-                if lstyle == 9:
-                    lstyle = 2
-                    pass
+            eff_itr=0
+            def ApplyEfficiency(content, initial_value_list, prev_value_list, itr):
+                string = None
+                if first_cut: 
+                    initial_value_list.append( content )
+                    prev_value_list.append( content )
+                    content = 100.0
+                    if DoPreviousEfficiency and DoTotalEfficiency:
+                        string = "%.3g\\%% (%.3g\\%%)" % (content, content)
+                    else:
+                        string = "%.3g\\%%" % content
+                else:
+                    initial_efficiency = content/initial_value_list[itr]*100.0
+                    prev_efficiency = content/prev_value_list[itr]*100.0
+                    prev_value_list[itr] = content
 
-        if hTitle!="":
-            hists1d[0].SetTitle(hTitle)
-        hists1d[0].GetYaxis().SetTitle("probability")
-        if not overlaySigMC or plotSigMC:
-            hists1d[0].Draw( "HIST" )
-        else:
-            hists1d[0].Draw( "HIST,SAME" )
-        for h in range(1,len(hists1d)):
-            hists1d[h].Draw( "HIST SAME" )
-            pass
-
-        legend2.Draw()
-
-
-        # Now create the plot:
-        cv.SaveAs( filename )
-        return addedSamples
-
-###############################
+                    if DoPreviousEfficiency and DoTotalEfficiency:
+                        string = "%.3g\\%% (%.3g\\%%) " % (initial_efficiency, prev_efficiency)
+                    elif DoTotalEfficiency and not DoPreviousEfficiency:
+                        string = "%.3g\\%% " % initial_efficiency
+                    elif DoPreviousEfficiency and not DoTotalEfficiency:
+                        prev_value_list[itr] = content
+                        string = "%.3g\\%% " % prev_efficiency
+                    else:
+                        print "Bad Table configuration"
+                        raise Exception("Bad Table Configuration")
+                return string
 
 
+            for (name, hist) in mcHistList:
+                content = hist.GetBinContent(cutIndex)
+                mc_total += content
+                if DoEfficiency: 
+                    string = ApplyEfficiency(content, initial_value_list, prev_value_list, eff_itr)
+                    row.append(string)
+                    eff_itr += 1
+                else:
+                    row.append("%#.3g " % content )
+            if DoTotalMC  and len(mcHistList)!=0:
+                if DoEfficiency:
+                    string = ApplyEfficiency(content, initial_value_list, prev_value_list, eff_itr)
+                    row.append(string)
+                    eff_itr += 1
+                else:
+                    row.append("%#.3g " % mc_total)
+            for (name, hist) in bsmHistList:
+                content = hist.GetBinContent(cutIndex)
+                if DoEfficiency:
+                    string = ApplyEfficiency(content, initial_value_list, prev_value_list, eff_itr)
+                    row.append(string)
+                    eff_itr += 1
+                else:
+                    row.append("%#.3g " % content)
+            for (name, hist) in dataHistList:
+                content = hist.GetBinContent(cutIndex)
+                if DoEfficiency:
+                    string = ApplyEfficiency(content, initial_value_list, prev_value_list, eff_itr)
+                    row.append(string)
+                    eff_itr += 1
+                else:
+                    row.append("%.3g " % content)
+                pass
 
-######################
-# plot 2D histograms #
-######################
-
-    def Draw2Dhisto( self, hname, filename, hTitle="", plotSigMC=True ):
-        # Retrieve the data and MC histograms:
-        dhist = self.GetDataHist( hname )
-        mchists = self.GetMCHists( hname )
-        bsmhists = self.GetBSMHists( hname )
-
-        topMargin = ROOT.gStyle.GetPadTopMargin()
-        bottomMargin = ROOT.gStyle.GetPadBottomMargin()
-        rightMargin = ROOT.gStyle.GetPadRightMargin()
-        leftMargin = ROOT.gStyle.GetPadLeftMargin()
-        ROOT.gStyle.SetPadTopMargin(0.12)
-        ROOT.gStyle.SetPadBottomMargin(0.12)
-        ROOT.gStyle.SetPadRightMargin(0.16)
-        ROOT.gStyle.SetPadLeftMargin(0.19)
-
-        ROOT.gStyle.SetPalette(1)
-        ROOT.gStyle.SetTitleFillColor(0)
-
-        # Create a canvas:
-        canvas = ROOT.TCanvas( hname + "_cnvs", "Canvas for 2D plots", 800, 600 )
-        canvas.cd()
-
-        # Sum together the background histograms
-        if len(mchists)<1:
-            self.logger.error("ERROR in Draw2Dhisto: empty mchists" )
-            return
-
-        hBkg = None
-        for mctype in mchists.keys():
-            h2d = mchists[ mctype ]
-            if not hBkg:
-                hBkg = h2d.Clone(hname+mctype+" Bkg")
-            else:
-                hBkg.Add( h2d )
-            pass
-
-        maximum = max( [ hBkg.GetMaximum(), dhist.GetMaximum() ] )
-        maximum *= 2.0        
-        hBkg.SetMaximum( maximum )
-
-        hBkg.SetFillColor(4)
-
-        canvas.cd().SetLogz()
-
-        if hTitle!="":
-            hBkg.SetTitle(hTitle)
-        # Plot the background first, the the data
-        hBkg.Draw( "COLZ" )
-
-        dhist.Draw( "BOX,SAME" )
-
-        # Create a legend for the plot:
-        legend1 = ROOT.TLegend( self.__2DlegendLowX, self.__2DlegendLowY,
-                               self.__2DlegendHighX, self.__2DlegendHighY )
-        legend1.AppendPad()
-        legend1.SetFillStyle( 1001 )
-        legend1.SetFillColor( 0 )
-        legend1.AddEntry( dhist, "data", "lfa" )
-        legend1.AddEntry( hBkg, "background", "fa" )
-        legend1.Draw();
+            first_cut = False
+            table.append(row)
         
-        # Add the ATLAS notations:
-        import AtlasUtil
-        AtlasUtil.AtlasLabel( 0.35, 0.91 )
-        AtlasUtil.DrawLuminosity( 0.01, 0.91, self.__luminosity )
 
-        canvas.SaveAs( filename )
-
-        if not plotSigMC:
-            ROOT.gStyle.SetPadTopMargin(topMargin)
-            ROOT.gStyle.SetPadBottomMargin(bottomMargin)
-            ROOT.gStyle.SetPadRightMargin(rightMargin)
-            ROOT.gStyle.SetPadLeftMargin(leftMargin)
-            return
-
-
-        tStyle = ROOT.gStyle.GetOptTitle()
-        ROOT.gStyle.SetOptTitle(1)
-        counter=1
-        # Draw the BSM histograms one-by-one:
-        for bsmtype in bsmhists.keys():
-            canvas.cd().SetLogz()
-            h2d = bsmhists[ bsmtype ]
-            if h2d.GetEntries() < 1:
-                continue
-            # normalization
-            area = h2d.Integral()
-            if area > 0:
-                h2d.Scale(1.0/area)
-                h2d.SetTitle( h2d.GetTitle() + ": " + bsmtype
-#                               + " (x" + str( self.__bsmsamples[ bsmtype ][ 0 ][ 1 ] ) + ")"
-                              )
-                h2d.GetZaxis().SetTitle("probability")
-                if hTitle!="":
-                    h2d.SetTitle(hTitle)
-                h2d.Draw( "COLZ" )
-
-            if area == 0:
-                canvas.cd().SetLogz(0)
-                h2d.Draw()
-
-            filename2 = "signal_"+bsmtype+"_"+filename
-            canvas.SaveAs( filename2 )
-            counter += 1
-            pass
-
-        ROOT.gStyle.SetOptTitle(tStyle)
-        ROOT.gStyle.SetPadTopMargin(topMargin)
-        ROOT.gStyle.SetPadBottomMargin(bottomMargin)
-        ROOT.gStyle.SetPadRightMargin(rightMargin)
-        ROOT.gStyle.SetPadLeftMargin(leftMargin)
-
+        latex_table = MakeLatexTable(table)
+        output = open( outputName, "w" )
+        output.write(latex_table)
+        output.close()
+        print "Wrote Table: ", outputName
         return
 
-###############################
+    '''
 
+        output = open( outputName, "w" )
 
+        # Make the title
+        # Make the Top Row
+        print >>output, "\\begin{tabular}{r", 
+        for num in range(len(mcHistList)):
+            print >>output, "|c",            
+        if DoTotalMC and len(mcHistList)!=0:
+            print >>output, "|c",
+        for num in range(len(bsmHistList) + len(dataHistList)):
+            print >>output, "|c",            
+        print >>output, "}"
+        print >>output, "\\toprule"
+        print >>output, " ", # Blank Insert
 
-###############################
-# plot slices of 3D histogram #
-###############################
-
-    def DrawHoriSliceFrom3D( self, hname, filename, firstBin=0, lastBin=-1, hTitle="", plotSigMC=True ):
-        # Retrieve the data and MC histograms:
-        dhist = self.GetDataHist( hname )
-        mchists = self.GetMCHists( hname )
-        bsmhists = self.GetBSMHists( hname )
-
-        topMargin = ROOT.gStyle.GetPadTopMargin()
-        bottomMargin = ROOT.gStyle.GetPadBottomMargin()
-        rightMargin = ROOT.gStyle.GetPadRightMargin()
-        leftMargin = ROOT.gStyle.GetPadLeftMargin()
-        ROOT.gStyle.SetPadTopMargin(0.14)
-        ROOT.gStyle.SetPadBottomMargin(0.14)
-        ROOT.gStyle.SetPadRightMargin(0.16)
-        ROOT.gStyle.SetPadLeftMargin(0.16)
-
-        ROOT.gStyle.SetPalette(1)
-        ROOT.gStyle.SetTitleFillColor(0)
-
-        # Create a canvas:
-        canvas = ROOT.TCanvas( hname + "_cv", "Canvas for 2D plots", 800, 600 )
-        canvas.cd()
-
-        # Sum together the background histograms
-        if len(mchists)<1:
-            self.logger.error( "ERROR in DrawHoriSliceFrom3D: empty mchists" )
-            return
-
-        hBkg = None
-        for mctype in mchists.keys():
-            h3d = mchists[ mctype ]
-            title = h3d.GetTitle() + ": "
-            zaxis = h3d.GetZaxis()
-            label = zaxis.GetBinLabel(firstBin)
-            zaxis.SetRange(firstBin, lastBin)
-            h2d = h3d.Project3D("yx")
-            h2d.SetName(title+label+mctype+" Bkg")
-            if hTitle==0:
-                h2d.SetTitle(title+label)
-            else:
-                h2d.SetTitle(hTitle)
-            if not hBkg:
-                hBkg = h2d.Clone(title + "_Bkg")
-            else:
-                hBkg.Add( h2d )
-            pass
-
-        hBkg.SetFillColor(4)
-
-        title = dhist.GetTitle() + ": "
-        zaxis = dhist.GetZaxis()
-        label = zaxis.GetBinLabel(firstBin)
-        zaxis.SetRange(firstBin, lastBin)
-        hData = dhist.Project3D("yx")
-        hData.SetName(title+label)
-        if hTitle==0:
-            hData.SetTitle(title+label+": "+bsmtype)
-        else:
-            hData.SetTitle(hTitle)
-
-
-        maximum = max( [ hBkg.GetMaximum(), hData.GetMaximum() ] )
-        maximum *= 2.0        
-        hBkg.SetMaximum( maximum )
-
-        # Plot the background first, the the data
-        hBkg.Draw( "COLZ" )
-        hData.Draw( "BOX,SAME" )
-
-        # Create a legend for the plot:
-        legend1 = ROOT.TLegend( self.__2DlegendLowX, self.__2DlegendLowY,
-                               self.__2DlegendHighX, self.__2DlegendHighY )
-        legend1.AppendPad()
-        legend1.SetFillStyle( 1001 )
-        legend1.SetFillColor( 0 )
-        legend1.AddEntry( hData, "data", "lfa" )
-        legend1.AddEntry( hBkg, "background", "fa" )
-        legend1.Draw();
-
-        # Add the ATLAS notations:
-        import AtlasUtil
-        AtlasUtil.AtlasLabel( 0.35, 0.91 )
-        AtlasUtil.DrawLuminosity( 0.01, 0.91, self.__luminosity )
-
-        canvas.SaveAs( filename )
-
-        if not plotSigMC:
-            ROOT.gStyle.SetPadTopMargin(topMargin)
-            ROOT.gStyle.SetPadBottomMargin(bottomMargin)
-            ROOT.gStyle.SetPadRightMargin(rightMargin)
-            ROOT.gStyle.SetPadLeftMargin(leftMargin)
-            return
-
-
-        tStyle = ROOT.gStyle.GetOptTitle()
-        ROOT.gStyle.SetOptTitle(1)
-        counter=1
-        # Draw the BSM histograms one-by-one:
-        for bsmtype in bsmhists.keys():
-            canvas.cd().SetLogz()
-            h3d = bsmhists[ bsmtype ]
-            if h3d.GetEntries() < 1:
-                continue
-            title = h3d.GetTitle() + ": "
-            zaxis = h3d.GetZaxis()
-            label = zaxis.GetBinLabel(firstBin)
-            zaxis.SetRange(firstBin, lastBin)
-            h2d = h3d.Project3D("yx")
-            if h2d.GetEntries() < 1:
-                continue
-            h2d.SetName(title+label+" Sig: "+bsmtype)
-            if hTitle==0:
-                h2d.SetTitle(title+label+": "+bsmtype)
-            else:
-                h2d.SetTitle(hTitle)      
-            # normalization
-            area = h2d.Integral()
-            if area > 0:
-                h2d.Scale(1.0/area)
-                h2d.SetTitle( h3d.GetTitle() + ": " + bsmtype
-#                               + " (x" + str( self.__bsmsamples[ bsmtype ][ 0 ][ 1 ] ) + ")"
-                              )
-                h2d.GetZaxis().SetTitle("probability")
-                if hTitle!="":
-                    h2d.SetTitle(hTitle)
-                h2d.Draw( "COLZ" )
-            if area == 0:
-                canvas.cd().SetLogz(0)
-                h2d.Draw()
-            filename2 = "signal_"+bsmtype+"_"+filename
-            canvas.SaveAs( filename2 )
-            counter += 1
-            pass
-
-
-        ROOT.gStyle.SetOptTitle(tStyle)
-        ROOT.gStyle.SetPadTopMargin(topMargin)
-        ROOT.gStyle.SetPadBottomMargin(bottomMargin)
-        ROOT.gStyle.SetPadRightMargin(rightMargin)
-        ROOT.gStyle.SetPadLeftMargin(leftMargin)
+        # Make the Titles
+        for (name, hist) in mcHistList:
+            print >>output, ("& %s " % MakeLatexString(name)),
+        if DoTotalMC and len(mcHistList)!=0:
+            print >>output, "& Total",
+        for (name, hist) in bsmHistList:
+            print >>output, ("& %s " % MakeLatexString(name)),
+        for (name, hist) in dataHistList:
+            print >>output, ("& %s " % MakeLatexString(name)),
+        print >>output, "\\\\" # End Line
+        print >>output, "\\toprule"
         
-        return
+        if DoEfficiency:
+            initial_value_list = []
+            prev_value_list = []
 
-###############################
+        first_cut = True
+        for cut in range(NumCuts):
+            
+            cutIndex = cut + 1 # Silly ROOT Histogram conventions
+            cutName = template.GetXaxis().GetBinLabel( cutIndex )
+
+            # If we specify a list of cuts, 
+            # only include those ones
+            if cutList != []:
+                if cutName not in cutList:
+                    continue
+                pass
+
+            print >>output, " %s " % (cutName),
+
+            mc_total = 0
+
+            eff_itr=0
+            def ApplyEfficiency(content, initial_value_list, prev_value_list, itr):
+                if first_cut: 
+                    initial_value_list.append( content )
+                    prev_value_list.append( content )
+                    content = 100.0
+                else:
+                    initial_efficiency = content/initial_value_list[itr]*100.0
+                    previous_efficiency = content/previous_value_list[itr]*100.0
+
+                    if DoTotalEfficiency and not DoPreviousEfficiency:
+                        string = "& %.3g " % initial_efficiency
+                    if DoPreviousEfficiency and not DoTotalEfficiency:
+                        previous_value_list[itr] = content
+                        string = "& %.3g " % previous_efficiency
+                    if DoPreviousEfficiency and DoTotalEfficiency:
+                        string = "& %.3g %.3g " % (initial_efficiency, previous_efficiency)                        
+                return string
+
+
+            for (name, hist) in mcHistList:
+                content = hist.GetBinContent(cutIndex)
+                mc_total += content
+                if DoEfficiency: 
+                    string = ApplyEfficiency(content, initial_value_list, eff_itr)
+                    print >>output, string
+                    eff_itr += 1
+                else:
+                    print >>output, ("& %#.3g " % content ),
+            if DoTotalMC  and len(mcHistList)!=0:
+                if DoEfficiency:
+                    string = ApplyEfficiency(content, initial_value_list, eff_itr)
+                    print >>output, string
+                    eff_itr += 1
+                else:
+                    print >>output, ("& %#.3g " % mc_total ),
+            for (name, hist) in bsmHistList:
+                content = hist.GetBinContent(cutIndex)
+                if DoEfficiency:
+                    string = ApplyEfficiency(content, initial_value_list, eff_itr)
+                    print >>output, string
+                    eff_itr += 1
+                else:
+                    print >>output, ("& %#.3g " % content),
+            for (name, hist) in dataHistList:
+                content = hist.GetBinContent(cutIndex)
+                if DoEfficiency:
+                    string = ApplyEfficiency(content, initial_value_list, eff_itr)
+                    print >>output, string
+                    eff_itr += 1
+                else:
+                    print >>output, ("& %.3g " % content),
+                pass
+
+            print >>output, " \\\\ "
+            first_cut = False
+            continue
+
+        print >>output, "\\bottomrule"
+        print >>output, "\\end{tabular}"
+        
+        print "Made Table: " + outputName
+        output.close()
+            
+        pass
+'''
+
+
+    #
+    # Plot Generator and Caching
+    #
+
+    def GeneratePlot( self, request ):
+        """ Take a request and pass it to the cooresponding function:
+
+        This is a central function that simply looks at the type
+        of plot associated with a request and, based on that, 
+        passes the request to the proper function.
+
+        All possible functions must be hard-coded here.
+        This makes it easy for the cache to work, since 
+        to generate plots from cached requests, one need
+        only loop over the cache and pass each request through
+        this function.
+
+        """
+
+        plotType   = request["Type"]
+        outputName = request["OutputName"]
+
+        if plotType == "":
+            print "Error: No Plot type found"
+            raise Exception("PlotGenerator - PlotType")
+
+        elif plotType == "SamplePlot":
+            MakeMultiplePlot( outputName, request )
+
+        elif plotType == "EfficiencyPlot":
+            MakeQuotientPlot( outputName, request )
+
+        elif plotType == "MCDataStack":
+            MakeMCDataStack( outputName, request )
+
+        elif plotType == "Stack":
+            MakeStack( outputName, request )
+
+        elif plotType == "MCStack":
+            MakeMCStack( outputName, request )
+
+        elif plotType == "MultipleSamplePlot":
+            MakeMultiplePlot( outputName, request )
+
+        elif plotType == "MultipleVariablePlot":
+            MakeMultiplePlot( outputName, request )
+
+        elif plotType == "MultipleTH1Plot":
+            MakeMultipleTH1Plot( outputName, request )
+
+        else:
+            print "Error: Plot Type %s not known"
+            raise Exception("PlotGenerator - PlotType");
+
+
+    def FillCachedHistograms( self ):
+        """ Cache all histograms in the request cache
+
+        This is the real advantage of the cache:
+        - Loop through all requests in the request cache
+        - Get the names and files of all histograms that will be needed
+        - Loop over each file and cache all the necessary histograms
+
+        The idea is that each file needs to only be opened once, which
+        saves a lot of time in I/O
+        """
+
+        FileHistMap = {}
+
+        for request in self.requestCache:
+            for plot in request["Plots"]:
+                
+                name = plot["Hist"]
+                
+                # Each plot may draw from multiple files
+                # get those using glob:
+                if "FileList" not in plot:
+                    FileList = glob.glob( plot["Files"] )
+
+                fileList = plot["FileList"]
+
+                for file in fileList:
+                    # Create the list 
+                    #if it's not already there
+                    if file not in FileHistMap:
+                        FileHistMap[ file ] = []
+                    # Add to the list:
+                    FileHistMap[ file ].append( name )
+                pass
+            pass
+
+        # Now that we have the list, 
+        # Let's cache all histograms
+        for file, histlist in FileHistMap.iteritems():
+            self.histCache.CacheHists( file, histlist )
+
+        print "Successfully cached all histograms"
+    
+
+    def ClearHistCache( self ):
+        """ Clear the histogram Cache """
+        self.histCache.ClearCache()
+
+
+    def GeneratePlotsInCache( self ) :
+        """ Generate all plots that have been cached
+        
+        This is to be used after all desired plots
+        have been constructed and cached, usually
+        at the end of a script
+        """
+
+        # Cache the Hists, opening
+        # each file only once
+        self.FillCachedHistograms()
+
+        # Make the Plots
+        for request in self.requestCache:
+            self.GeneratePlot( request )
+
+        # Clear the request cache
+        del self.requestCache[ : ]
 
