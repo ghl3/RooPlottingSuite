@@ -463,6 +463,8 @@ class PlotMaker( ROOT.TNamed ):
         else:
             print "Error: Sample %s not found in either MC or data" % sampleName
             raise Exception("GetSample - Sample")
+        
+        plot["SampleName"] = sampleName
 
         return plot
 
@@ -496,7 +498,7 @@ class PlotMaker( ROOT.TNamed ):
         # If the sample list is empty, use all samples
         if sample_list == []:
             for name, sample in available_samples.iteritems(): 
-                plot = copy.deepcopy(sample)
+                plot = self.GetPlot(sample["Name"]) #copy.deepcopy(sample)
                 plot_list.append( plot )
             pass
 
@@ -521,7 +523,7 @@ class PlotMaker( ROOT.TNamed ):
             for name in sample_list:
                 if name not in available_samples: continue
                 sample = available_samples[name]
-                plot = copy.deepcopy(sample)
+                plot = self.GetPlot(sample["Name"]) #copy.deepcopy(sample)
                 plot_list.append( plot )
 
         '''
@@ -580,9 +582,7 @@ class PlotMaker( ROOT.TNamed ):
         if cache:
             self.requestCache.append( request )
         else:
-            MakeMultiplePlot( outputName, request );
-
-        return
+            return MakeMultiplePlot( outputName, request );
 
 
     def MakeEfficiencyPlot( self, numerator, denominator, sampleName, outputName="", cache=False, **kwargs):
@@ -688,12 +688,13 @@ class PlotMaker( ROOT.TNamed ):
 
         # Always add all data
         for name, sample in self.__datasamples.iteritems():
-            plot = copy.deepcopy(sample)
+            plot = self.GetPlot(sample["Name"]) #copy.deepcopy(sample)
             #plot["Hist"] = hist
             request["Plots"].append( plot )
 
         # Add the MC and BSM samples to the request
         # based on the sampleList (if there is one)
+        #for sample in [plot["Name"] for plot in itertools.chain(self.__mcsamples, self.__bsmsamples]
         mc_bsm_samples = self.GetListOfPlots( [self.__mcsamples, self.__bsmsamples], sampleList ) 
         request["Plots"].extend( mc_bsm_samples )
 
@@ -970,7 +971,7 @@ class PlotMaker( ROOT.TNamed ):
         if cache:
             self.requestCache.append( request )
         else:
-            MakeMultiplePlot( outputName, request );
+            return MakeMultiplePlot( outputName, request );
 
         return
 

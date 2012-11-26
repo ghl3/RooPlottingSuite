@@ -21,8 +21,9 @@ def MakeMCDataStack( outputName, request, histCache=None ):
     #ROOT.gROOT.cd()
     #canvas = ROOT.TCanvas("canvas", "Canvas for plot making", 800, 600 )
     #canvas.cd()
-
-    (canvas, TopPad, BottomPad) = MakeCanvas(request)
+    
+    if not request.get("UseCurrentCanvas"):
+        (canvas, TopPad, BottomPad) = MakeCanvas(request)
 
     # Get the data hist
     dataHistList = GetDataNameHistList( request, histCache )
@@ -44,17 +45,18 @@ def MakeMCDataStack( outputName, request, histCache=None ):
 
     #SetLegendBoundaries( legend, request )
     #legend.Draw()
-
-    AdjustCanvas( canvas, request )
+    
+    if not request.get("UseCurrentCanvas"):
+        AdjustCanvas( canvas, request )
 
     if request.get("RatioPlot"):
         BottomPad.cd()
         ratio = DrawRatioPlot(request, mcHistList, dataHistList)
 
-    SaveCanvas( canvas, request, outputName )
-
-    canvas.Close()
-    del canvas
+    if not request.get("UseCurrentCanvas"):
+        SaveCanvas( canvas, request, outputName )
+        canvas.Close()
+        del canvas
 
     return
 
@@ -142,7 +144,6 @@ def DrawRatioPlot(request, mcList, dataHistList):
     denominator = templateHist.Clone(templateName + "_denominator")
     for (name, hist) in mcList[1:]:
         denominator.Add(hist)
-
 
     # Get the Ratio
     ratio = dhist.Clone(dName + "_ratio")        

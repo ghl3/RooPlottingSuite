@@ -44,7 +44,7 @@ def ParseOptionalArgs( kwargs ):
         SupportedRequestOptions = ["Formats", "SuppressLegend",
                                    "DrawErrors", "UseLogScale", 
                                    "Minimum", "Maximum", "LegendBoundaries",
-                                   "RatioPlot"]
+                                   "RatioPlot", "UseCurrentCanvas", "CanvasTitle"]
         if key in SupportedRequestOptions:
             requestOptions[key] = val
 
@@ -92,7 +92,7 @@ def GetHist( plot, histCache=None ):
         histName = plot["Prefix"] + histName
 
     if "{{Sample}}" in histName:
-        histName = histName.replace("{{Sample}}", plot["Name"])
+        histName = histName.replace("{{Sample}}", plot["SampleName"])
 
     logging.debug( "GetAndStyleHist: Getting Hist: %s" % histName )
     
@@ -438,7 +438,7 @@ def SetLegendBoundaries( legend, request ):
 
 #
 #
-def MakeCanvas(request, ):
+def MakeCanvas(request):
     """ Create a canvas and return it
 
     If a Ratio Plot is requested, we also
@@ -446,27 +446,29 @@ def MakeCanvas(request, ):
 
     """
 
-    print "Making Canvas"
-    
     bottom_min = .05
     top_min = .25
 
-
-    ROOT.gROOT.cd()
-    canvas = ROOT.TCanvas("canvas", "Canvas for plot making", 800, 600 )
-    canvas.cd()
+    if request.get("UseCurrentCanvas"):
+        canvas = ROOT.gPad.cd() # ROOT.gPad.GetCanvas() #ROOT.GetSelectedPad()
+    else:
+        ROOT.gROOT.cd()
+        canvas = ROOT.TCanvas("canvas", "Canvas for plot making", 800, 600 )
+        canvas.cd()
 
     if not request.get("RatioPlot"):
         return (canvas, None, None)
     else:
         print "Doing Ratio Plot"
         BottomPad = ROOT.TPad("BottomPad","BottomPad", 0.0, bottom_min, 1.0, top_min);
-        BottomPad.SetTopMargin(0);
-        BottomPad.SetBottomMargin(0);
+        BottomPad.SetTopMargin(.1);
+        BottomPad.SetBottomMargin(.1);
         canvas.cd()
         BottomPad.Draw();
         
         TopPad = ROOT.TPad("TopPad","TopPad", 0.0, top_min, 1.0, 1.0);
+        TopPad.SetTopMargin(.05);
+        TopPad.SetBottomMargin(.1);
         canvas.cd()
         TopPad.Draw();
         TopPad.cd()
@@ -566,7 +568,8 @@ def ResizeHistogram( template, histList, request={} ):
         for hist in histList:
             maximum = max( maximum, hist.GetMaximum() )
 
-        maximum += math.sqrt( maximum )
+        if request.get("DrawErrors"):
+            maximum += math.sqrt( maximum )
         maximum *= 1.4
 
     # If Log scale, adjust the maximum
