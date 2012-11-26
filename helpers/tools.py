@@ -459,7 +459,6 @@ def MakeCanvas(request):
     if not request.get("RatioPlot"):
         return (canvas, None, None)
     else:
-        print "Doing Ratio Plot"
         BottomPad = ROOT.TPad("BottomPad","BottomPad", 0.0, bottom_min, 1.0, top_min);
         BottomPad.SetTopMargin(.1);
         BottomPad.SetBottomMargin(.1);
