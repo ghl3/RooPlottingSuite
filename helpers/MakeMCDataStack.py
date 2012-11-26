@@ -119,7 +119,6 @@ def DrawMCDataStack( dataHistList, mcHistList, bsmHistList, request={} ):
         legend.AddEntry( bsmhist, name, "l" )
         bsmhist.Draw("HIST SAME")
 
-
     legend.Draw()
 
     # Now create the plot:

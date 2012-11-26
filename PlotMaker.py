@@ -278,7 +278,7 @@ class PlotMaker( ROOT.TNamed ):
     # Sample adding methods
     #
 
-    def AddDataSample( self, name, files, title=None ):
+    def AddDataSample( self, name, files, title=None, prefix=None ):
         """ Add a Data Sample 
 
         Supply it a name and a file (or list of files using '*')
@@ -293,7 +293,7 @@ class PlotMaker( ROOT.TNamed ):
             title=name
 
         # Create the dictionary
-        info = { "Name" : name, "Files" : files, "Title" : title, 
+        info = { "Name" : name, "Files" : files, "Title" : title, "Prefix" : prefix, 
                  "FileList" : FileList, "Type" : "DATA", "ScaleByLumi" : False }
 
         if name not in self.__datasamples:
@@ -305,7 +305,8 @@ class PlotMaker( ROOT.TNamed ):
         return
 
 
-    def AddMCSample( self, name, files, color=None, title=None, linestyle=0, signal=None, 
+    def AddMCSample( self, name, files, prefix=None, 
+                     color=None, title=None, linestyle=0, signal=None, 
                      Scale=None, ScaleByLumi=True ):
         """ Add a MC Sample 
 
@@ -335,7 +336,8 @@ class PlotMaker( ROOT.TNamed ):
         # Otherwise, create the sample
         else:
             info = { "Name" : name, "Files" : files, "FileList" : FileList, 
-                     "Title" : title, "Scale" : Scale, "Color" : color, 
+                     "Title" : title, "Prefix" : prefix,
+                     "Scale" : Scale, "Color" : color, 
                      "LineStyle" : linestyle, "Signal" : signal, "Type" : "MC",
                      "ScaleByLumi" : ScaleByLumi }
             self.__mcsamples[name] = info
@@ -343,7 +345,8 @@ class PlotMaker( ROOT.TNamed ):
         return
 
 
-    def AddBSMSample( self, name, files, color=None, title=None, linestyle=0, Scale=None ):
+    def AddBSMSample( self, name, files, prefix=None, 
+                      color=None, title=None, linestyle=0, Scale=None ):
         """ Add a BSM Sample 
 
         Supply it a name, a file (or list of files using '*' )
@@ -371,7 +374,8 @@ class PlotMaker( ROOT.TNamed ):
 
         # Otherwise, create the sample
         else:
-            info = { "Name" : name, "Files" : files, "FileList" : FileList, "Scale" : Scale, "ScaleByLumi" : True,
+            info = { "Name" : name, "Files" : files, "FileList" : FileList, 
+                     "Prefix" : prefix, "Scale" : Scale, "ScaleByLumi" : True,
                      "Title" : title, "Color" : color, "LineStyle" : linestyle, "Type" : "BSM" }
             self.__bsmsamples[name] = info
 
@@ -485,7 +489,7 @@ class PlotMaker( ROOT.TNamed ):
         # Be sure to Maintain Order
         available_samples = OrderedDict()
         for dict in sample_dict_list:
-            for (key, val) in dict.iteritems():
+            for (key, val) in reversed(list(dict.iteritems())):
                 available_samples[key] = val
             pass
 
@@ -906,7 +910,8 @@ class PlotMaker( ROOT.TNamed ):
         return
 
 
-    def MakeMultipleVariablePlot( self, histList, sampleName, outputName="", nameList=[], colorList=[], cache=False, **kwargs ):
+    def MakeMultipleVariablePlot( self, histList, sampleName, outputName="", 
+                                  nameList=[], colorList=[], cache=False, **kwargs ):
         """ Make a plot all histograms in the list simultaneously
 
         For a particular sample given by the sampleName,
@@ -939,17 +944,6 @@ class PlotMaker( ROOT.TNamed ):
         request.update( requestOptions )
         #request["Lumi"] = self.__luminosity
         request["Plots"] = []
-
-        '''
-        plotTemplate = self.GetSample( sampleName ) #None
-        UseNameList = False
-        if len( nameList ) == len( histList ):
-            UseNameList = True
-
-        UseColorList = False
-        if len( colorList ) == len( histList ):
-            UseColorList = True
-        '''
 
         # Loop over all requested histograms,
         # configure the plots, and add them to
