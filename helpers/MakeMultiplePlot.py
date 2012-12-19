@@ -25,7 +25,6 @@ def MakeMultiplePlot( outputName, request, histCache=None ):
     #    canvas = ROOT.TCanvas("canvas", "Canvas for plot making", 800, 600 )
     #    canvas.cd()
     (canvas, TopPad, BottomPad) = MakeCanvas(request)
-    print "Canvas in method: ", canvas
     
     # Get the data hist
     histList = GetNameHistList( request, histCache )

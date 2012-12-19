@@ -1056,6 +1056,14 @@ class PlotMaker( ROOT.TNamed ):
         return
 
 
+    def DrawText(self, text, x0=0.4, y0=0.75, x1=0.6, y1=0.9):
+        text_obj = ROOT.TPaveText(x0, y0, x1, y1, "NDC")
+        text_obj.SetFillColor(0);
+        text_obj.SetBorderSize(0)
+        text_obj.SetTextSize(0.08);
+        text_obj.AddText(text)
+        text_obj.Draw();
+        return text_obj
     
     def MakeTable( self, histName, sampleName, outputName="", cache=False, **kwargs ):
         """ Make a table from a given histogram for a given sample
@@ -1103,8 +1111,8 @@ class PlotMaker( ROOT.TNamed ):
         return
 
 
-    def MakeSingleCutSelectionTable( self, cutName, channelHistList, outputName="", sampleList=[], channelNameList=[], 
-                                     DoTotalMC=True, **kwargs ):
+    def MakeSingleCutSelectionTable( self, cutName, channelHistList, outputName="", sampleList=[], 
+                                     channelNameList=[], DoTotalMC=True, **kwargs ):
         """ Make a selection table for a particular cut 
         
         If you save a histogram where each bin represents a cut and is labeled, 
@@ -1334,8 +1342,9 @@ class PlotMaker( ROOT.TNamed ):
         pass
 '''
 
-    def MakeSingleChannelSelectionTable( self, channelHistName, sampleList=[], cutList=[], outputName="", 
-                                         DoTotalMC=True, DoTotalEfficiency=False, DoPreviousEfficiency=False, **kwargs ):
+    def MakeSingleChannelSelectionTable( self, channelHistName, sampleList=[], cutList=[], 
+                                         outputName="", DoTotalMC=True, DoTotalEfficiency=False, 
+                                         DoPreviousEfficiency=False, **kwargs ):
         """ Make a selection table for a particular cut 
         
         Table Looks Like This:
