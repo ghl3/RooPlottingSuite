@@ -22,8 +22,8 @@ def MakeMCDataStack( outputName, request, histCache=None ):
     #canvas = ROOT.TCanvas("canvas", "Canvas for plot making", 800, 600 )
     #canvas.cd()
     
-    if not request.get("UseCurrentCanvas"):
-        (canvas, TopPad, BottomPad) = MakeCanvas(request)
+    #if not request.get("UseCurrentCanvas"):
+    (canvas, TopPad, BottomPad) = MakeCanvas(request)
 
     # Get the data hist
     dataHistList = GetDataNameHistList( request, histCache )
@@ -49,17 +49,18 @@ def MakeMCDataStack( outputName, request, histCache=None ):
     if not request.get("UseCurrentCanvas"):
         AdjustCanvas( canvas, request )
 
+    ratio_list = []
     if request.get("RatioPlot"):
         BottomPad.cd()
-        BottomPad.SetGrid();
-        ratio = DrawRatioPlot(mcHistList, dataHistList, request)
+        ratio_list = DrawRatioPlot(request, mcHistList, dataHistList)
+        TopPad.cd()
 
     if not request.get("UseCurrentCanvas"):
         SaveCanvas( canvas, request, outputName )
         canvas.Close()
         del canvas
 
-    return
+    return (stack, legend, ratio_list, TopPad, BottomPad)
 
     
 
@@ -87,6 +88,11 @@ def DrawMCDataStack( dataHistList, mcHistList, bsmHistList, request={} ):
 
     # There should be only 1 data hist
     (dName, dhist ) = dataHistList[0]
+
+    # Set the errors of the dhist
+    for i in range(dhist.GetNbinsX()):
+        i_bin = i+1
+        dhist.SetBinError(i_bin, math.sqrt(dhist.GetBinContent(i_bin)))
 
     ResizeHistogram( dhist, [dhist] + [pair[1] for pair in mcHistList + bsmHistList], request )
     dhist.Draw()
