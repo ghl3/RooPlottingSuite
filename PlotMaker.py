@@ -225,9 +225,7 @@ class PlotMaker( ROOT.TNamed ):
 
         ConfigState["LegendBoundaries"] = (self.__legendLowX,  self.__legendLowY, 
                                            self.__legendHighX, self.__legendHighY)
-
         return ConfigState
-
 
 
     def SetLegendBoundaries( self, lowX, lowY, highX, highY ):
@@ -240,6 +238,8 @@ class PlotMaker( ROOT.TNamed ):
         self.__legendHighX = highX
         self.__legendHighY = highY
         return
+
+
     def SetLegendSize( self, lowX, lowY, highX, highY ):
         """ Backward Compatability """
         SetLegendBoundaries( lowX, lowY, highX, highY )

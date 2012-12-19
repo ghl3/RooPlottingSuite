@@ -17,13 +17,15 @@ def MakeMultiplePlot( outputName, request, histCache=None ):
     - Save the canvas
     """
 
-    logging.debug( "MakeMultiplePlot" )
+    #logging.debug( "MakeMultiplePlot" )
     
     # Create a canvas:
     #if not request.get("UseCurrentCanvas"):
     #    ROOT.gROOT.cd()
     #    canvas = ROOT.TCanvas("canvas", "Canvas for plot making", 800, 600 )
     #    canvas.cd()
+
+    #if not request.get("UseCurrentCanvas"):
     (canvas, TopPad, BottomPad) = MakeCanvas(request)
     
     # Get the data hist
@@ -37,10 +39,10 @@ def MakeMultiplePlot( outputName, request, histCache=None ):
 
     AdjustAndDrawLegend(legend, request)
 
-    AdjustCanvas(canvas, request)
+    if not request.get("UseCurrentCanvas"):
+        AdjustCanvas(canvas, request)
 
-    ratio=None
-
+    ratio_list = []
     if request.get("RatioPlot"):
         BottomPad.cd()
         ratio_list = DrawRatioPlot(request, histList[1:], histList[1])
@@ -99,7 +101,12 @@ def DrawMultiplePlot( histList, request={} ):
         legendEntries.append( [hist, name, "l"] )
         pass
 
-
+    # Draw again so its on top (hack)
+    if request.get("DrawErrors"):
+        firstHist.Draw("SAME")
+    else:
+        firstHist.Draw("SAMEHIST")
+    
     legend = MakeLegend( legendEntries, request )
 
     """
