@@ -4,6 +4,8 @@ import os
 
 import ROOT
 from tools import *
+from RatioPlot import DrawRatioPlot
+
 
 def MakeMultiplePlot( outputName, request, histCache=None ):
     """ Plot Multiple histograms on one canvas
@@ -16,12 +18,15 @@ def MakeMultiplePlot( outputName, request, histCache=None ):
     """
 
     logging.debug( "MakeMultiplePlot" )
-
+    
     # Create a canvas:
-    ROOT.gROOT.cd()
-    canvas = ROOT.TCanvas("canvas", "Canvas for plot making", 800, 600 )
-    canvas.cd()
-
+    #if not request.get("UseCurrentCanvas"):
+    #    ROOT.gROOT.cd()
+    #    canvas = ROOT.TCanvas("canvas", "Canvas for plot making", 800, 600 )
+    #    canvas.cd()
+    (canvas, TopPad, BottomPad) = MakeCanvas(request)
+    print "Canvas in method: ", canvas
+    
     # Get the data hist
     histList = GetNameHistList( request, histCache )
 
@@ -31,17 +36,23 @@ def MakeMultiplePlot( outputName, request, histCache=None ):
     # We collect the return so it isn't destroyed
     legend = DrawMultiplePlot( histList, request )
 
-    AdjustAndDrawLegend( legend, request )
+    AdjustAndDrawLegend(legend, request)
 
-    AdjustCanvas( canvas, request )
+    AdjustCanvas(canvas, request)
 
-    SaveCanvas( canvas, request, outputName )
-    
-    canvas.Close()
-    del canvas
+    ratio=None
 
-    return
+    if request.get("RatioPlot"):
+        BottomPad.cd()
+        ratio_list = DrawRatioPlot(request, histList[1:], histList[1])
+        TopPad.cd()
 
+    if not request.get("UseCurrentCanvas"):
+        SaveCanvas( canvas, request, outputName )    
+        canvas.Close()
+        del canvas
+
+    return (histList, legend, ratio_list, TopPad, BottomPad)
 
 
 def DrawMultiplePlot( histList, request={} ):
