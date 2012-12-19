@@ -21,7 +21,8 @@ def MakeMCDataStack( outputName, request, histCache=None ):
     #ROOT.gROOT.cd()
     #canvas = ROOT.TCanvas("canvas", "Canvas for plot making", 800, 600 )
     #canvas.cd()
-
+    
+    #if not request.get("UseCurrentCanvas"):
     (canvas, TopPad, BottomPad) = MakeCanvas(request)
 
     # Get the data hist
@@ -44,20 +45,22 @@ def MakeMCDataStack( outputName, request, histCache=None ):
 
     #SetLegendBoundaries( legend, request )
     #legend.Draw()
+    
+    if not request.get("UseCurrentCanvas"):
+        AdjustCanvas( canvas, request )
 
-    AdjustCanvas( canvas, request )
-
+    ratio_list = []
     if request.get("RatioPlot"):
         BottomPad.cd()
-        BottomPad.SetGrid();
-        ratio = DrawRatioPlot(mcHistList, dataHistList, request)
+        ratio_list = DrawRatioPlot(request, mcHistList, dataHistList)
+        TopPad.cd()
 
-    SaveCanvas( canvas, request, outputName )
+    if not request.get("UseCurrentCanvas"):
+        SaveCanvas( canvas, request, outputName )
+        canvas.Close()
+        del canvas
 
-    canvas.Close()
-    del canvas
-
-    return
+    return (stack, legend, ratio_list, TopPad, BottomPad)
 
     
 
@@ -85,6 +88,11 @@ def DrawMCDataStack( dataHistList, mcHistList, bsmHistList, request={} ):
 
     # There should be only 1 data hist
     (dName, dhist ) = dataHistList[0]
+
+    # Set the errors of the dhist
+    for i in range(dhist.GetNbinsX()):
+        i_bin = i+1
+        dhist.SetBinError(i_bin, math.sqrt(dhist.GetBinContent(i_bin)))
 
     ResizeHistogram( dhist, [dhist] + [pair[1] for pair in mcHistList + bsmHistList], request )
     dhist.Draw()
@@ -120,7 +128,6 @@ def DrawMCDataStack( dataHistList, mcHistList, bsmHistList, request={} ):
         legend.AddEntry( bsmhist, name, "l" )
         bsmhist.Draw("HIST SAME")
 
-
     legend.Draw()
 
     # Now create the plot:
@@ -151,7 +158,6 @@ def DrawRatioPlot(mcList, dataHistList, request=None):
     denominator = templateHist.Clone(templateName + "_denominator")
     for (name, hist) in mcList[1:]:
         denominator.Add(hist)
-
 
     # Get the Ratio
     ratio = dhist.Clone(dName + "_ratio")        

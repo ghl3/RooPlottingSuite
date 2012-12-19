@@ -4,6 +4,8 @@ import os
 
 import ROOT
 from tools import *
+from RatioPlot import DrawRatioPlot
+
 
 def MakeMultiplePlot( outputName, request, histCache=None ):
     """ Plot Multiple histograms on one canvas
@@ -15,13 +17,17 @@ def MakeMultiplePlot( outputName, request, histCache=None ):
     - Save the canvas
     """
 
-    logging.debug( "MakeMultiplePlot" )
-
+    #logging.debug( "MakeMultiplePlot" )
+    
     # Create a canvas:
-    ROOT.gROOT.cd()
-    canvas = ROOT.TCanvas("canvas", "Canvas for plot making", 800, 600 )
-    canvas.cd()
+    #if not request.get("UseCurrentCanvas"):
+    #    ROOT.gROOT.cd()
+    #    canvas = ROOT.TCanvas("canvas", "Canvas for plot making", 800, 600 )
+    #    canvas.cd()
 
+    #if not request.get("UseCurrentCanvas"):
+    (canvas, TopPad, BottomPad) = MakeCanvas(request)
+    
     # Get the data hist
     histList = GetNameHistList( request, histCache )
 
@@ -31,17 +37,23 @@ def MakeMultiplePlot( outputName, request, histCache=None ):
     # We collect the return so it isn't destroyed
     legend = DrawMultiplePlot( histList, request )
 
-    AdjustAndDrawLegend( legend, request )
+    AdjustAndDrawLegend(legend, request)
 
-    AdjustCanvas( canvas, request )
+    if not request.get("UseCurrentCanvas"):
+        AdjustCanvas(canvas, request)
 
-    SaveCanvas( canvas, request, outputName )
-    
-    canvas.Close()
-    del canvas
+    ratio_list = []
+    if request.get("RatioPlot"):
+        BottomPad.cd()
+        ratio_list = DrawRatioPlot(request, histList[1:], histList[1])
+        TopPad.cd()
 
-    return
+    if not request.get("UseCurrentCanvas"):
+        SaveCanvas( canvas, request, outputName )    
+        canvas.Close()
+        del canvas
 
+    return (histList, legend, ratio_list, TopPad, BottomPad)
 
 
 def DrawMultiplePlot( histList, request={} ):
@@ -89,7 +101,12 @@ def DrawMultiplePlot( histList, request={} ):
         legendEntries.append( [hist, name, "l"] )
         pass
 
-
+    # Draw again so its on top (hack)
+    if request.get("DrawErrors"):
+        firstHist.Draw("SAME")
+    else:
+        firstHist.Draw("SAMEHIST")
+    
     legend = MakeLegend( legendEntries, request )
 
     """

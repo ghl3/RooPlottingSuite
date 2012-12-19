@@ -24,6 +24,7 @@ else:
 from helpers.MakeStack import *
 from helpers.MakeMCStack import *
 from helpers.MakeMCDataStack import *
+from helpers.MakeDataPlot import *
 from helpers.MakeMultiplePlot import *
 from helpers.MakeQuotientPlot import *
 from helpers.MakeMultipleTH1Plot import *
@@ -141,7 +142,7 @@ class PlotMaker( ROOT.TNamed ):
 
         self.__outputDir = ""
 
-        self.__defaultcolors     = [29,34,30,33,38,46,41,40,14,21,47,49,9,43,23,45]+[34,46,43,30,31,44,42,47,29,45,33,36,35,27,32,41,39,38,26,37,48,40]+[4,3,2,6,38,33,20,7,8] 
+        self.__defaultcolors     = [30,33,38,46,41,40,14,21,29,34,47,49,9,43,23,45]+[34,46,43,30,31,44,42,47,29,45,33,36,35,27,32,41,39,38,26,37,48,40]+[4,3,2,6,38,33,20,7,8] 
         self.__defaultlinestyles = [4,3,2,5,6,40,41,46,38,33,30,20,7,8,9] # bright colors
 
         return
@@ -225,9 +226,7 @@ class PlotMaker( ROOT.TNamed ):
 
         ConfigState["LegendBoundaries"] = (self.__legendLowX,  self.__legendLowY, 
                                            self.__legendHighX, self.__legendHighY)
-
         return ConfigState
-
 
 
     def SetLegendBoundaries( self, lowX, lowY, highX, highY ):
@@ -240,6 +239,8 @@ class PlotMaker( ROOT.TNamed ):
         self.__legendHighX = highX
         self.__legendHighY = highY
         return
+
+
     def SetLegendSize( self, lowX, lowY, highX, highY ):
         """ Backward Compatability """
         SetLegendBoundaries( lowX, lowY, highX, highY )
@@ -278,7 +279,7 @@ class PlotMaker( ROOT.TNamed ):
     # Sample adding methods
     #
 
-    def AddDataSample( self, name, files, title=None ):
+    def AddDataSample( self, name, files, title=None, prefix=None ):
         """ Add a Data Sample 
 
         Supply it a name and a file (or list of files using '*')
@@ -293,7 +294,7 @@ class PlotMaker( ROOT.TNamed ):
             title=name
 
         # Create the dictionary
-        info = { "Name" : name, "Files" : files, "Title" : title, 
+        info = { "Name" : name, "Files" : files, "Title" : title, "Prefix" : prefix, 
                  "FileList" : FileList, "Type" : "DATA", "ScaleByLumi" : False }
 
         if name not in self.__datasamples:
@@ -305,7 +306,8 @@ class PlotMaker( ROOT.TNamed ):
         return
 
 
-    def AddMCSample( self, name, files, color=None, title=None, linestyle=0, signal=None, 
+    def AddMCSample( self, name, files, prefix=None, 
+                     color=None, title=None, linestyle=0, signal=None, 
                      Scale=None, ScaleByLumi=True ):
         """ Add a MC Sample 
 
@@ -335,7 +337,8 @@ class PlotMaker( ROOT.TNamed ):
         # Otherwise, create the sample
         else:
             info = { "Name" : name, "Files" : files, "FileList" : FileList, 
-                     "Title" : title, "Scale" : Scale, "Color" : color, 
+                     "Title" : title, "Prefix" : prefix,
+                     "Scale" : Scale, "Color" : color, 
                      "LineStyle" : linestyle, "Signal" : signal, "Type" : "MC",
                      "ScaleByLumi" : ScaleByLumi }
             self.__mcsamples[name] = info
@@ -343,7 +346,8 @@ class PlotMaker( ROOT.TNamed ):
         return
 
 
-    def AddBSMSample( self, name, files, color=None, title=None, linestyle=0, Scale=None ):
+    def AddBSMSample( self, name, files, prefix=None, 
+                      color=None, title=None, linestyle=0, Scale=None ):
         """ Add a BSM Sample 
 
         Supply it a name, a file (or list of files using '*' )
@@ -371,7 +375,8 @@ class PlotMaker( ROOT.TNamed ):
 
         # Otherwise, create the sample
         else:
-            info = { "Name" : name, "Files" : files, "FileList" : FileList, "Scale" : Scale, "ScaleByLumi" : True,
+            info = { "Name" : name, "Files" : files, "FileList" : FileList, 
+                     "Prefix" : prefix, "Scale" : Scale, "ScaleByLumi" : True,
                      "Title" : title, "Color" : color, "LineStyle" : linestyle, "Type" : "BSM" }
             self.__bsmsamples[name] = info
 
@@ -459,6 +464,8 @@ class PlotMaker( ROOT.TNamed ):
         else:
             print "Error: Sample %s not found in either MC or data" % sampleName
             raise Exception("GetSample - Sample")
+        
+        plot["SampleName"] = sampleName
 
         return plot
 
@@ -485,14 +492,14 @@ class PlotMaker( ROOT.TNamed ):
         # Be sure to Maintain Order
         available_samples = OrderedDict()
         for dict in sample_dict_list:
-            for (key, val) in dict.iteritems():
+            for (key, val) in reversed(list(dict.iteritems())):
                 available_samples[key] = val
             pass
 
         # If the sample list is empty, use all samples
         if sample_list == []:
             for name, sample in available_samples.iteritems(): 
-                plot = copy.deepcopy(sample)
+                plot = self.GetPlot(sample["Name"]) #copy.deepcopy(sample)
                 plot_list.append( plot )
             pass
 
@@ -517,7 +524,7 @@ class PlotMaker( ROOT.TNamed ):
             for name in sample_list:
                 if name not in available_samples: continue
                 sample = available_samples[name]
-                plot = copy.deepcopy(sample)
+                plot = self.GetPlot(sample["Name"]) #copy.deepcopy(sample)
                 plot_list.append( plot )
 
         '''
@@ -559,13 +566,8 @@ class PlotMaker( ROOT.TNamed ):
         request = {}
         request.update( self.GetConfigurationState() )
         request.update( requestOptions )
-        #request["Lumi"] = self.__luminosity
         request["Plots"] = []
 
-        #foundSample = False
-
-        #plotTemplate = self.GetSample( sampleName ) #None
-        #plot = copy.deepcopy( plotTemplate )
         plot = self.GetPlot( sampleName )
         plot.update( plotOptions )
         plot["Hist"]  = histName
@@ -576,9 +578,7 @@ class PlotMaker( ROOT.TNamed ):
         if cache:
             self.requestCache.append( request )
         else:
-            MakeMultiplePlot( outputName, request );
-
-        return
+            return MakeMultiplePlot( outputName, request );
 
 
     def MakeEfficiencyPlot( self, numerator, denominator, sampleName, outputName="", cache=False, **kwargs):
@@ -601,13 +601,10 @@ class PlotMaker( ROOT.TNamed ):
         request["DrawErrors"] = True # Set the default
         request.update( self.GetConfigurationState() )
         request.update( requestOptions )
-        #request["Lumi"] = self.__luminosity
 
         if "Maximum" not in request:
             request["Maximum"] = 1.2 # Efficiency Maximum
         request["Plots"] = []
-
-        #foundSample = False
 
         plotTemplate = self.GetPlot( sampleName ) #None
         plotTemplate["FillColor"] = 0 # No Fill
@@ -627,7 +624,6 @@ class PlotMaker( ROOT.TNamed ):
         request["Plots"].append( plotDenominator )
 
         # Now, the request will create two plots
-
         request["Type"] = "EfficiencyPlot"
         request["OutputName"] = outputName
 
@@ -674,7 +670,6 @@ class PlotMaker( ROOT.TNamed ):
         request = {}
         request.update( self.GetConfigurationState() )
         request.update( requestOptions )
-        #request["Lumi"] = self.__luminosity
         request["Plots"] = []
         
         # Configure all plots to be added
@@ -684,12 +679,12 @@ class PlotMaker( ROOT.TNamed ):
 
         # Always add all data
         for name, sample in self.__datasamples.iteritems():
-            plot = copy.deepcopy(sample)
-            #plot["Hist"] = hist
+            plot = self.GetPlot(sample["Name"]) #copy.deepcopy(sample)
             request["Plots"].append( plot )
 
         # Add the MC and BSM samples to the request
         # based on the sampleList (if there is one)
+        #for sample in [plot["Name"] for plot in itertools.chain(self.__mcsamples, self.__bsmsamples]
         mc_bsm_samples = self.GetListOfPlots( [self.__mcsamples, self.__bsmsamples], sampleList ) 
         request["Plots"].extend( mc_bsm_samples )
 
@@ -698,39 +693,74 @@ class PlotMaker( ROOT.TNamed ):
             plot["Hist"] = hist
             plot.update( plotOptions )
 
-        """
-        for name, sample in self.__mcsamples.iteritems():
-            if sampleList != []:
-                if name not in sampleList:
-                    continue
-                pass
-            plot = copy.deepcopy(sample)
-            plot.update( plotOptions )
-            plot["Hist"] = hist
-            request["Plots"].append( plot )
-
-        for name, sample in self.__bsmsamples.iteritems():
-            if sampleList != []:
-                if name not in sampleList:
-                    continue
-                pass
-            plot = copy.deepcopy(sample)
-            plot.update( plotOptions )
-            plot["Hist"] = hist
-            request["Plots"].append( plot )
-        """
         # Set the request type
         request["Type"] = "MCDataStack"
         request["OutputName"] = outputName
 
         # If cache, wait for later
         # Else, make the histogram now
-
         if cache:
             self.requestCache.append( request )
         else:
-            #MakeMCDataStack.MakeMCDataStack( outputName, request );
             MakeMCDataStack( outputName, request );
+
+        ROOT.gROOT.DeleteAll()
+
+        return
+
+
+    def MakeDataPlot(self, hist, outputName="", cache=False, **kwargs):
+        """ Make a plot of data and a stack of MC 
+
+        This function calls :py:meth:`helpers.MakeMCDataStack.MakeMCDataStack`
+
+        Deligate the work to the helper function 
+        of the same name.
+        Here, simply build up the JSON request
+        from the current state of the class
+        and pass it to the function.
+        """
+        # Build up the set of samples
+        # and add configuration
+
+        # IF necessary, make a default name
+        if outputName == "":
+            outputName = "%s.pdf" % hist
+
+        # Parse the optional arguments
+        ( requestOptions, plotOptions ) = ParseOptionalArgs( kwargs )
+
+        request = {}
+        request.update( self.GetConfigurationState() )
+        request.update( requestOptions )
+        request["DrawErrors"] = True
+        request["Plots"] = []
+        
+        # Configure all plots to be added
+        # Do this by collecting the MC and
+        # datasamples and setting their
+        # histograms to the request HIST
+
+        # Always add all data
+        for name, sample in self.__datasamples.iteritems():
+            plot = self.GetPlot(sample["Name"]) #copy.deepcopy(sample)
+            request["Plots"].append( plot )
+
+        # Configure all plots
+        for plot in request["Plots"]:
+            plot["Hist"] = hist
+            plot.update( plotOptions )
+
+        # Set the request type
+        request["Type"] = "DataPlot"
+        request["OutputName"] = outputName
+
+        # If cache, wait for later
+        # Else, make the histogram now
+        if cache:
+            self.requestCache.append( request )
+        else:
+            MakeDataPlot( outputName, request );
 
         ROOT.gROOT.DeleteAll()
 
@@ -776,18 +806,6 @@ class PlotMaker( ROOT.TNamed ):
             plot.extend( plotOptions )
         request["Plots"].extend( mc_bsm_samples )
 
-        """
-        allSamples = itertools.chain(self.__datasamples.iteritems(), self.__mcsamples.iteritems(), self.__bsmsamples.iteritems())
-        for name, sample in allSamples:
-            if sampleList != []:
-                if name not in sampleList:
-                    continue
-                pass
-            plot = copy.deepcopy(sample)
-            plot.update( plotOptions )
-            plot["Hist"] = hist
-            request["Plots"].append( plot )
-        """
         # Set the request type
         request["Type"] = "Stack"
         request["OutputName"] = outputName
@@ -824,7 +842,6 @@ class PlotMaker( ROOT.TNamed ):
         request = {}
         request.update( self.GetConfigurationState() )
         request.update( requestOptions )
-        #request["Lumi"] = self.__luminosity
         request["Plots"] = []
 
         # Configure all plots to be added
@@ -840,26 +857,12 @@ class PlotMaker( ROOT.TNamed ):
             plot.update( plotOptions )
         request["Plots"] = mc_bsm_samples 
         
-
-        """
-        allMCSamples = itertools.chain(self.__mcsamples.iteritems(), self.__bsmsamples.iteritems())
-        for name, sample in allMCSamples:
-            if sampleList != []:
-                if name not in sampleList:
-                    continue
-                pass
-            plot = copy.deepcopy(sample)
-            plot.update( plotOptions )
-            plot["Hist"] = hist
-            request["Plots"].append( plot )
-        """
         # Set the request type
         request["Type"] = "MCStack"
         request["OutputName"] = outputName
 
         # If cache, wait for later
         # Else, make the histogram now
-
         if cache:
             self.requestCache.append( request )
         else:
@@ -883,7 +886,6 @@ class PlotMaker( ROOT.TNamed ):
         request = {}
         request.update( self.GetConfigurationState() )
         request.update( requestOptions )
-        #request["Lumi"] = self.__luminosity
         request["Plots"] = []
 
         all_plots = self.GetListOfPlots( [self.__datasamples, self.__mcsamples, self.__bsmsamples], 
@@ -906,7 +908,8 @@ class PlotMaker( ROOT.TNamed ):
         return
 
 
-    def MakeMultipleVariablePlot( self, histList, sampleName, outputName="", nameList=[], colorList=[], cache=False, **kwargs ):
+    def MakeMultipleVariablePlot( self, histList, sampleName, outputName="", 
+                                  nameList=[], colorList=[], cache=False, **kwargs ):
         """ Make a plot all histograms in the list simultaneously
 
         For a particular sample given by the sampleName,
@@ -940,17 +943,6 @@ class PlotMaker( ROOT.TNamed ):
         #request["Lumi"] = self.__luminosity
         request["Plots"] = []
 
-        '''
-        plotTemplate = self.GetSample( sampleName ) #None
-        UseNameList = False
-        if len( nameList ) == len( histList ):
-            UseNameList = True
-
-        UseColorList = False
-        if len( colorList ) == len( histList ):
-            UseColorList = True
-        '''
-
         # Loop over all requested histograms,
         # configure the plots, and add them to
         # the plot ist
@@ -976,7 +968,7 @@ class PlotMaker( ROOT.TNamed ):
         if cache:
             self.requestCache.append( request )
         else:
-            MakeMultiplePlot( outputName, request );
+            return MakeMultiplePlot( outputName, request );
 
         return
 
@@ -1061,6 +1053,14 @@ class PlotMaker( ROOT.TNamed ):
         return
 
 
+    def DrawText(self, text, x0=0.4, y0=0.75, x1=0.6, y1=0.9):
+        text_obj = ROOT.TPaveText(x0, y0, x1, y1, "NDC")
+        text_obj.SetFillColor(0);
+        text_obj.SetBorderSize(0)
+        text_obj.SetTextSize(0.08);
+        text_obj.AddText(text)
+        text_obj.Draw();
+        return text_obj
     
     def MakeTable( self, histName, sampleName, outputName="", cache=False, **kwargs ):
         """ Make a table from a given histogram for a given sample
@@ -1108,8 +1108,8 @@ class PlotMaker( ROOT.TNamed ):
         return
 
 
-    def MakeSingleCutSelectionTable( self, cutName, channelHistList, outputName="", sampleList=[], channelNameList=[], 
-                                     DoTotalMC=True, **kwargs ):
+    def MakeSingleCutSelectionTable( self, cutName, channelHistList, outputName="", sampleList=[], 
+                                     channelNameList=[], DoTotalMC=True, **kwargs ):
         """ Make a selection table for a particular cut 
         
         If you save a histogram where each bin represents a cut and is labeled, 
@@ -1339,8 +1339,9 @@ class PlotMaker( ROOT.TNamed ):
         pass
 '''
 
-    def MakeSingleChannelSelectionTable( self, channelHistName, sampleList=[], cutList=[], outputName="", 
-                                         DoTotalMC=True, DoTotalEfficiency=False, DoPreviousEfficiency=False, **kwargs ):
+    def MakeSingleChannelSelectionTable( self, channelHistName, sampleList=[], cutList=[], 
+                                         outputName="", DoTotalMC=True, DoTotalEfficiency=False, 
+                                         DoPreviousEfficiency=False, **kwargs ):
         """ Make a selection table for a particular cut 
         
         Table Looks Like This:

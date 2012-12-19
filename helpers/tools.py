@@ -44,13 +44,13 @@ def ParseOptionalArgs( kwargs ):
         SupportedRequestOptions = ["Formats", "SuppressLegend",
                                    "DrawErrors", "UseLogScale", 
                                    "Minimum", "Maximum", "LegendBoundaries",
-                                   "RatioPlot"]
+                                   "RatioPlot", "UseCurrentCanvas", "CanvasTitle"]
         if key in SupportedRequestOptions:
             requestOptions[key] = val
 
         # Plot
         SupportedPlotOptions = ["Name", "XAxisTitle", "YAxisTitle",
-                                "Normalize", "Rebin", "SkipBins" ]
+                                "Normalize", "Rebin", "SkipBins"]
         if key in SupportedPlotOptions:
             plotOptions[key] = val
 
@@ -71,6 +71,7 @@ def GetAndStyleHist( plot, histCache=None ):
     hist = StyleHist( hist, plot )
     return hist
 
+
 def GetHist( plot, histCache=None ):
     """ Get, style, and return a single histogram
 
@@ -87,6 +88,11 @@ def GetHist( plot, histCache=None ):
 
     # Get the histName of the histogram
     histName = plot["Hist"]
+    if plot.get("Prefix"):
+        histName = plot["Prefix"] + histName
+
+    if "{{Sample}}" in histName:
+        histName = histName.replace("{{Sample}}", plot["SampleName"])
 
     logging.debug( "GetAndStyleHist: Getting Hist: %s" % histName )
     
@@ -95,6 +101,11 @@ def GetHist( plot, histCache=None ):
 
     if len(plot["FileList"]) == 0:
         plot["FileList"] = glob.glob( plot["Files"] )
+
+    # If there are still no files....
+    if len(plot["FileList"]) == 0:
+        print "Error: No files found in glob string: ", plot["Files"]
+        raise Exception("Files")
 
     # Get the list of files
     files = plot["FileList"]
@@ -135,6 +146,12 @@ def StyleHist( hist, plot ):
     """ Style a histogram and return it
 
     """
+
+    #if plot.get("Signal"):
+    #    plot["Color"] = 2
+    #    plot["FillColor"] = 2
+    #    plot["LineColor"] = 1
+
     # Color the same
     if "Color" in plot:
         hist.SetFillColor( plot["Color"] )
@@ -152,15 +169,17 @@ def StyleHist( hist, plot ):
     if "LineColor" in plot:
         hist.SetLineColor( plot["LineColor"] )
 
-    if plot.get("Signal"):
-        hist.SetFillColor(0)
-        hist.SetLineColor(1)
-        
     if plot.get("Scale"):
         hist.Scale( plot["Scale"] )
 
     if plot.get("Rebin"):
         RebinHist(hist, plot["Rebin"])
+
+    if plot.get("Signal"):
+        hist.SetFillColor(0)
+        hist.SetLineColor(1)
+        hist.SetLineStyle(1)
+        hist.SetLineWidth(2)
 
     # Ignore certain bins if required.
     # This is done AFTER rebinning is applied
@@ -256,7 +275,7 @@ def GetMCNameHistList( request, histCache=None ):
     the order when we draw)
     """
 
-    tmpSignalList = []
+    #tmpSignalList = []
 
     mcHistList = []
     for plot in request["Plots"]:
@@ -283,13 +302,14 @@ def GetMCNameHistList( request, histCache=None ):
             pass
         '''
         logging.debug( "GetMCNameHistList - \t Got MC Hist %s %s" % (name, hist) )
-        if plot.get("Signal"):
-            tmpSignalList.append( (name, hist) )
-        else:
-            mcHistList.append( (name, hist) )
+        #if plot.get("Signal"):
+        #    tmpSignalList.append( (name, hist) )
+        #else:
+        #    mcHistList.append( (name, hist) )
+        mcHistList.append( (name, hist) )
 
-    for pair in tmpSignalList:
-        mcHistList.append( pair )
+    #for pair in tmpSignalList:
+    #    mcHistList.append( pair )
 
     return mcHistList
 
@@ -304,7 +324,7 @@ def GetBSMNameHistList( request, histCache=None ):
     the order when we draw)
     """
 
-    tmpSignalList = []
+    #tmpSignalList = []
 
     bsmHistList = []
     for plot in request["Plots"]:
@@ -329,13 +349,14 @@ def GetBSMNameHistList( request, histCache=None ):
             hist.Scale( lumi )
         '''
         logging.debug( "GetBSMNameHistList - \t Got BSM Hist %s %s" % (name, hist) )
-        if plot.get("Signal"):
-            tmpSignalList.append( (name, hist) )
-        else:
-            bsmHistList.append( (name, hist) )
+        #if plot.get("Signal"):
+        #    tmpSignalList.append( (name, hist) )
+        #else:
+        #    bsmHistList.append( (name, hist) )
+        bsmHistList.append( (name, hist) )
 
-    for pair in tmpSignalList:
-        bsmHistList.append( pair )
+    #for pair in tmpSignalList:
+    #    bsmHistList.append( pair )
 
     return bsmHistList
 
@@ -350,7 +371,7 @@ def GetNameHistList( request, histCache=None ):
     the order when we draw)
     """
 
-    tmpSignalList = []
+    #tmpSignalList = []
 
     histList = []
     for plot in request["Plots"]:
@@ -377,13 +398,14 @@ def GetNameHistList( request, histCache=None ):
             pass
         '''
         logging.debug( "GetMCNameHistList - \t Got MC Hist %s %s" % (name, hist) )
-        if plot.get("Signal"):
-            tmpSignalList.append( (name, hist) )
-        else:
-            histList.append( (name, hist) )
+        #if plot.get("Signal"):
+        #    tmpSignalList.append( (name, hist) )
+        #else:
+        #    histList.append( (name, hist) )
+        histList.append( (name, hist) )
 
-    for pair in tmpSignalList:
-        histList.append( pair )
+    #for pair in tmpSignalList:
+    #    histList.append( pair )
 
     return histList
 
@@ -416,7 +438,7 @@ def SetLegendBoundaries( legend, request ):
 
 #
 #
-def MakeCanvas(request, ):
+def MakeCanvas(request):
     """ Create a canvas and return it
 
     If a Ratio Plot is requested, we also
@@ -424,27 +446,28 @@ def MakeCanvas(request, ):
 
     """
 
-    print "Making Canvas"
-    
     bottom_min = .05
     top_min = .25
 
-
-    ROOT.gROOT.cd()
-    canvas = ROOT.TCanvas("canvas", "Canvas for plot making", 800, 600 )
-    canvas.cd()
+    if request.get("UseCurrentCanvas"):
+        canvas = ROOT.gPad.cd() # ROOT.gPad.GetCanvas() #ROOT.GetSelectedPad()
+    else:
+        ROOT.gROOT.cd()
+        canvas = ROOT.TCanvas("canvas", "Canvas for plot making", 800, 600 )
+        canvas.cd()
 
     if not request.get("RatioPlot"):
         return (canvas, None, None)
     else:
-        print "Doing Ratio Plot"
         BottomPad = ROOT.TPad("BottomPad","BottomPad", 0.0, bottom_min, 1.0, top_min);
-        BottomPad.SetTopMargin(0);
-        BottomPad.SetBottomMargin(0);
+        BottomPad.SetTopMargin(.1);
+        BottomPad.SetBottomMargin(.1);
         canvas.cd()
         BottomPad.Draw();
         
         TopPad = ROOT.TPad("TopPad","TopPad", 0.0, top_min, 1.0, 1.0);
+        TopPad.SetTopMargin(.05);
+        TopPad.SetBottomMargin(.1);
         canvas.cd()
         TopPad.Draw();
         TopPad.cd()
@@ -544,7 +567,8 @@ def ResizeHistogram( template, histList, request={} ):
         for hist in histList:
             maximum = max( maximum, hist.GetMaximum() )
 
-        maximum += math.sqrt( maximum )
+        if request.get("DrawErrors"):
+            maximum += math.sqrt( maximum )
         maximum *= 1.4
 
     # If Log scale, adjust the maximum
