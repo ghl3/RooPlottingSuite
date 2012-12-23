@@ -283,8 +283,8 @@ class PlotMaker( ROOT.TNamed ):
 
         Supply it a name and a file (or list of files using '*')
         """
-
-        self.logger.info( "AddDataFile: Adding data file: " + files )
+        for file in glob.glob(files):
+            self.logger.info( "AddDataFile: Adding data file: " + file )
 
         # Glob the files
         FileList = glob.glob( files )
@@ -314,7 +314,8 @@ class PlotMaker( ROOT.TNamed ):
         Optionally supply a color and a linestyle
         """
 
-        self.logger.info( "AddMCFile:  Adding Monte Carlo file: " + files + " (" + name + ")" )
+        for file in glob.glob(files):
+            self.logger.info( "AddMCFile:  Adding Monte Carlo file: " + file + " (" + name + ")" )
 
         # Pick a random color if none supplied
         if color == None:
