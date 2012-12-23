@@ -54,7 +54,6 @@ def MakeMCDataStack( outputName, request, histCache=None ):
         BottomPad.cd()
         ratio_list = DrawRatioPlot(request, mcHistList, dataHistList)
         TopPad.cd()
-        #ratio = DrawRatioPlot(request, mcHistList, dataHistList)
 
     if not request.get("UseCurrentCanvas"):
         SaveCanvas( canvas, request, outputName )
@@ -136,7 +135,14 @@ def DrawMCDataStack( dataHistList, mcHistList, bsmHistList, request={} ):
     return (stack, legend)
 
 
-def DrawRatioPlot(request, mcList, dataHistList):
+def DrawRatioPlot(mcList, dataHistList, request=None):
+    """ Take a list of histograms and draw the ratio of their sum
+
+    The properties of the ratio are specified in the 
+    optional 'request' option (but no such properties
+    are supported as of now)
+
+    """
 
     if len( dataHistList ) != 1:
         print "Error: More than 1 data sample supplied"
@@ -159,10 +165,13 @@ def DrawRatioPlot(request, mcList, dataHistList):
 
     ratio.SetAxisRange( 0, 2, "Y" )
 
+    # Treate the case of ~0.0/~0.0 as 1.0
     for bin_idx in range(dhist.GetNbinsX()):
         if dhist.GetBinContent(bin_idx+1) < .00001 and denominator.GetBinContent(bin_idx+1) < .00001:
             Quot.SetBinContent(bin_idx+1, 1.0)
             print "Setting 0/0 content to 1.0"
 
+
     ratio.Draw()
+
     return ratio

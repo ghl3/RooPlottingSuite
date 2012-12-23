@@ -3,8 +3,6 @@ RooPlottingSuite
 
 A set of tools for making plots using ROOT histograms
 
-
-
 # This package contains a set of pyroot
 # scripts meant to easily create nice
 # plots from a set of input
@@ -45,6 +43,3 @@ A set of tools for making plots using ROOT histograms
 # -- This is an executable that opens
 # up an input ROOT file and makes
 # plots of all histograms in that file
-
-
-

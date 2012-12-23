@@ -107,7 +107,8 @@ class AtlasStyle( ROOT.TStyle ):
         return
 
 # Tell ROOT to use this style:
-#style = AtlasStyle()
-#ROOT.gROOT.SetStyle( style.GetName() )
+style = AtlasStyle()
+ROOT.gROOT.SetStyle( style.GetName() )
 #ROOT.gROOT.ForceStyle()
-#ROOT.TGaxis.SetMaxDigits( 4 )
+ROOT.TGaxis.SetMaxDigits( 4 )
+ROOT.gStyle.SetPalette(1)

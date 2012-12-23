@@ -24,6 +24,7 @@ else:
 from helpers.MakeStack import *
 from helpers.MakeMCStack import *
 from helpers.MakeMCDataStack import *
+from helpers.MakeDataPlot import *
 from helpers.MakeMultiplePlot import *
 from helpers.MakeQuotientPlot import *
 from helpers.MakeMultipleTH1Plot import *
@@ -141,7 +142,7 @@ class PlotMaker( ROOT.TNamed ):
 
         self.__outputDir = ""
 
-        self.__defaultcolors     = [29,34,30,33,38,46,41,40,14,21,47,49,9,43,23,45]+[34,46,43,30,31,44,42,47,29,45,33,36,35,27,32,41,39,38,26,37,48,40]+[4,3,2,6,38,33,20,7,8] 
+        self.__defaultcolors     = [30,33,38,46,41,40,14,21,29,34,47,49,9,43,23,45]+[34,46,43,30,31,44,42,47,29,45,33,36,35,27,32,41,39,38,26,37,48,40]+[4,3,2,6,38,33,20,7,8] 
         self.__defaultlinestyles = [4,3,2,5,6,40,41,46,38,33,30,20,7,8,9] # bright colors
 
         return
@@ -566,13 +567,8 @@ class PlotMaker( ROOT.TNamed ):
         request = {}
         request.update( self.GetConfigurationState() )
         request.update( requestOptions )
-        #request["Lumi"] = self.__luminosity
         request["Plots"] = []
 
-        #foundSample = False
-
-        #plotTemplate = self.GetSample( sampleName ) #None
-        #plot = copy.deepcopy( plotTemplate )
         plot = self.GetPlot( sampleName )
         plot.update( plotOptions )
         plot["Hist"]  = histName
@@ -606,13 +602,10 @@ class PlotMaker( ROOT.TNamed ):
         request["DrawErrors"] = True # Set the default
         request.update( self.GetConfigurationState() )
         request.update( requestOptions )
-        #request["Lumi"] = self.__luminosity
 
         if "Maximum" not in request:
             request["Maximum"] = 1.2 # Efficiency Maximum
         request["Plots"] = []
-
-        #foundSample = False
 
         plotTemplate = self.GetPlot( sampleName ) #None
         plotTemplate["FillColor"] = 0 # No Fill
@@ -632,7 +625,6 @@ class PlotMaker( ROOT.TNamed ):
         request["Plots"].append( plotDenominator )
 
         # Now, the request will create two plots
-
         request["Type"] = "EfficiencyPlot"
         request["OutputName"] = outputName
 
@@ -679,7 +671,6 @@ class PlotMaker( ROOT.TNamed ):
         request = {}
         request.update( self.GetConfigurationState() )
         request.update( requestOptions )
-        #request["Lumi"] = self.__luminosity
         request["Plots"] = []
         
         # Configure all plots to be added
@@ -690,7 +681,6 @@ class PlotMaker( ROOT.TNamed ):
         # Always add all data
         for name, sample in self.__datasamples.iteritems():
             plot = self.GetPlot(sample["Name"]) #copy.deepcopy(sample)
-            #plot["Hist"] = hist
             request["Plots"].append( plot )
 
         # Add the MC and BSM samples to the request
@@ -704,39 +694,74 @@ class PlotMaker( ROOT.TNamed ):
             plot["Hist"] = hist
             plot.update( plotOptions )
 
-        """
-        for name, sample in self.__mcsamples.iteritems():
-            if sampleList != []:
-                if name not in sampleList:
-                    continue
-                pass
-            plot = copy.deepcopy(sample)
-            plot.update( plotOptions )
-            plot["Hist"] = hist
-            request["Plots"].append( plot )
-
-        for name, sample in self.__bsmsamples.iteritems():
-            if sampleList != []:
-                if name not in sampleList:
-                    continue
-                pass
-            plot = copy.deepcopy(sample)
-            plot.update( plotOptions )
-            plot["Hist"] = hist
-            request["Plots"].append( plot )
-        """
         # Set the request type
         request["Type"] = "MCDataStack"
         request["OutputName"] = outputName
 
         # If cache, wait for later
         # Else, make the histogram now
-
         if cache:
             self.requestCache.append( request )
         else:
-            #MakeMCDataStack.MakeMCDataStack( outputName, request );
             MakeMCDataStack( outputName, request );
+
+        ROOT.gROOT.DeleteAll()
+
+        return
+
+
+    def MakeDataPlot(self, hist, outputName="", cache=False, **kwargs):
+        """ Make a plot of data and a stack of MC 
+
+        This function calls :py:meth:`helpers.MakeMCDataStack.MakeMCDataStack`
+
+        Deligate the work to the helper function 
+        of the same name.
+        Here, simply build up the JSON request
+        from the current state of the class
+        and pass it to the function.
+        """
+        # Build up the set of samples
+        # and add configuration
+
+        # IF necessary, make a default name
+        if outputName == "":
+            outputName = "%s.pdf" % hist
+
+        # Parse the optional arguments
+        ( requestOptions, plotOptions ) = ParseOptionalArgs( kwargs )
+
+        request = {}
+        request.update( self.GetConfigurationState() )
+        request.update( requestOptions )
+        request["DrawErrors"] = True
+        request["Plots"] = []
+        
+        # Configure all plots to be added
+        # Do this by collecting the MC and
+        # datasamples and setting their
+        # histograms to the request HIST
+
+        # Always add all data
+        for name, sample in self.__datasamples.iteritems():
+            plot = self.GetPlot(sample["Name"]) #copy.deepcopy(sample)
+            request["Plots"].append( plot )
+
+        # Configure all plots
+        for plot in request["Plots"]:
+            plot["Hist"] = hist
+            plot.update( plotOptions )
+
+        # Set the request type
+        request["Type"] = "DataPlot"
+        request["OutputName"] = outputName
+
+        # If cache, wait for later
+        # Else, make the histogram now
+        if cache:
+            self.requestCache.append( request )
+        else:
+            MakeDataPlot( outputName, request );
 
         ROOT.gROOT.DeleteAll()
 
@@ -782,18 +807,6 @@ class PlotMaker( ROOT.TNamed ):
             plot.extend( plotOptions )
         request["Plots"].extend( mc_bsm_samples )
 
-        """
-        allSamples = itertools.chain(self.__datasamples.iteritems(), self.__mcsamples.iteritems(), self.__bsmsamples.iteritems())
-        for name, sample in allSamples:
-            if sampleList != []:
-                if name not in sampleList:
-                    continue
-                pass
-            plot = copy.deepcopy(sample)
-            plot.update( plotOptions )
-            plot["Hist"] = hist
-            request["Plots"].append( plot )
-        """
         # Set the request type
         request["Type"] = "Stack"
         request["OutputName"] = outputName
@@ -830,7 +843,6 @@ class PlotMaker( ROOT.TNamed ):
         request = {}
         request.update( self.GetConfigurationState() )
         request.update( requestOptions )
-        #request["Lumi"] = self.__luminosity
         request["Plots"] = []
 
         # Configure all plots to be added
@@ -846,26 +858,12 @@ class PlotMaker( ROOT.TNamed ):
             plot.update( plotOptions )
         request["Plots"] = mc_bsm_samples 
         
-
-        """
-        allMCSamples = itertools.chain(self.__mcsamples.iteritems(), self.__bsmsamples.iteritems())
-        for name, sample in allMCSamples:
-            if sampleList != []:
-                if name not in sampleList:
-                    continue
-                pass
-            plot = copy.deepcopy(sample)
-            plot.update( plotOptions )
-            plot["Hist"] = hist
-            request["Plots"].append( plot )
-        """
         # Set the request type
         request["Type"] = "MCStack"
         request["OutputName"] = outputName
 
         # If cache, wait for later
         # Else, make the histogram now
-
         if cache:
             self.requestCache.append( request )
         else:
@@ -889,7 +887,6 @@ class PlotMaker( ROOT.TNamed ):
         request = {}
         request.update( self.GetConfigurationState() )
         request.update( requestOptions )
-        #request["Lumi"] = self.__luminosity
         request["Plots"] = []
 
         all_plots = self.GetListOfPlots( [self.__datasamples, self.__mcsamples, self.__bsmsamples], 
